@@ -84,6 +84,7 @@ lib/
 └── main.dart                       # Punto de entrada y observador del ciclo de vida de la aplicación.
 assets/
 └── images/                         # Recursos gráficos: logos, banners y material promocional.
+```
 
 
 
