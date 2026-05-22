@@ -1,17 +1,22 @@
+import 'dart:convert';
 import 'dart:io';
-import 'dart:convert'; 
-import 'package:flutter/material.dart';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+
+import '../core/app_routes.dart';
+import '../core/app_theme.dart';
+import '../core/constants.dart';
+import '../utils/ui_utils.dart';
 import 'pantalla_bienvenida.dart';
 
 class PantallaEditarPerfil extends StatefulWidget {
-  final String uid;
-  final String nombreActual;
-  final String telefonoActual;
-  // Recibimos la foto actual en formato texto (Base64)
-  final String? fotoBase64Actual; 
+  final String  uid;
+  final String  nombreActual;
+  final String  telefonoActual;
+  final String? fotoBase64Actual;
 
   const PantallaEditarPerfil({
     super.key,
@@ -26,111 +31,93 @@ class PantallaEditarPerfil extends StatefulWidget {
 }
 
 class _PantallaEditarPerfilState extends State<PantallaEditarPerfil> {
-  // Controladores para los campos de texto con los datos que ya tenía el usuario
   late TextEditingController _nombreCtrl;
   late TextEditingController _telefonoCtrl;
-  
-  // Para bloquear los botones mientras Firebase guarda los datos
-  bool _guardando = false;
-  
-  // Aquí guardaremos la nueva foto si el usuario decide cambiarla
-  File? _imagenSeleccionada; 
+  bool    _guardando           = false;
+  File?   _imagenSeleccionada;
   String? _nuevaFotoBase64;
+
+  FirebaseFirestore get _db => FirebaseFirestore.instance;
+  FirebaseAuth get _auth => FirebaseAuth.instance;
 
   @override
   void initState() {
     super.initState();
-    _nombreCtrl = TextEditingController(text: widget.nombreActual);
+    _nombreCtrl   = TextEditingController(text: widget.nombreActual);
     _telefonoCtrl = TextEditingController(text: widget.telefonoActual);
   }
 
-  // --- Lógica para seleccionar y transformar la foto ---
+  @override
+  void dispose() {
+    _nombreCtrl.dispose();
+    _telefonoCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _seleccionarImagen() async {
-    // Abrimos la galería del móvil
-    final ImagePicker picker = ImagePicker();
-    final XFile? imagen = await picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 50, // Comprimimos al 50% para que el texto Base64 no sea gigantesco
-    );
-
+    final XFile? imagen = await ImagePicker()
+        .pickImage(source: ImageSource.gallery, imageQuality: 50);
     if (imagen != null) {
-      File archivoFisico = File(imagen.path);
-      
-      // La magia: Leemos los bytes de la foto y los transformamos a texto (Base64)
-      List<int> bytesImagen = await archivoFisico.readAsBytes();
-      String base64String = base64Encode(bytesImagen);
-
+      final archivo = File(imagen.path);
+      final bytes   = await archivo.readAsBytes();
       setState(() {
-        _imagenSeleccionada = archivoFisico;
-        _nuevaFotoBase64 = base64String;
+        _imagenSeleccionada = archivo;
+        _nuevaFotoBase64    = base64Encode(bytes);
       });
     }
   }
 
-  // --- Lógica para guardar los cambios en Firebase ---
   Future<void> _guardarCambios() async {
-    String nuevoNombre = _nombreCtrl.text.trim();
-    String nuevoTelefono = _telefonoCtrl.text.trim();
-
-    // Validaciones básicas para que no nos dejen campos en blanco o teléfonos raros
-    if (nuevoNombre.isEmpty || nuevoTelefono.isEmpty) {
-      _mostrarMensaje('Rellena todos los campos', Colors.orange);
-      return;
+    final nombre   = _nombreCtrl.text.trim();
+    final telefono = _telefonoCtrl.text.trim();
+    if (nombre.isEmpty || telefono.isEmpty) {
+      _msg('Rellena todos los campos', AppTheme.warning); return;
     }
-    if (nuevoTelefono.length != 9) {
-      _mostrarMensaje('El teléfono debe tener 9 números', Colors.orange);
-      return;
+    if (telefono.length != 9) {
+      _msg('El teléfono debe tener 9 números', AppTheme.warning); return;
     }
-
-    setState(() { _guardando = true; });
-
+    setState(() => _guardando = true);
     try {
-      // Preparamos el "paquete" de datos a actualizar
-      Map<String, dynamic> datosActualizados = {
-        'nombre': nuevoNombre,
-        'telefono': nuevoTelefono,
+      final datos = <String, dynamic>{
+        Campos.nombre:   nombre,
+        Campos.telefono: telefono,
       };
-
-      // Si el usuario eligió una foto nueva, la añadimos al paquete
-      if (_nuevaFotoBase64 != null) {
-        datosActualizados['fotoPerfil'] = _nuevaFotoBase64;
-      }
-
-      // Mandamos la orden a Firestore
-      await FirebaseFirestore.instance.collection('clientes').doc(widget.uid).update(datosActualizados);
-
-      _mostrarMensaje('¡Perfil actualizado con éxito!', Colors.green);
-      
-      // Volvemos a la pantalla anterior
+      if (_nuevaFotoBase64 != null) datos[Campos.fotoPerfil] = _nuevaFotoBase64;
+      await _db
+          .collection(Colecciones.clientes).doc(widget.uid).update(datos);
+      _msg('¡Perfil actualizado!', AppTheme.success);
       if (mounted) Navigator.pop(context);
-
-    } catch (e) {
-      _mostrarMensaje('Error al actualizar el perfil', Colors.redAccent);
+    } catch (_) {
+      _msg('Error al actualizar el perfil', AppTheme.error);
     } finally {
-      if (mounted) setState(() { _guardando = false; });
+      if (mounted) setState(() => _guardando = false);
     }
   }
 
-  // --- Lógica de peligro: Borrar la cuenta ---
   void _confirmarBorrarCuenta() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.black,
-        title: const Text('¿Eliminar cuenta?', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+      builder: (ctx) => AlertDialog(
+        title: Text('¿Eliminar cuenta?',
+            style: AppTheme.titleMedium.copyWith(color: AppTheme.error)),
         content: const Text(
-          'Perderás tus Citas V, tu historial y tus reservas pendientes. Esta acción es irreversible.',
-          style: TextStyle(color: Colors.white70),
-        ),
+            'Perderás tus puntos, historial y reservas pendientes. Acción irreversible.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar', style: TextStyle(color: Colors.grey))),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
+          ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.error,
+              foregroundColor: AppTheme.textPrimary,
+              minimumSize: const Size(120, 44),
+            ),
             onPressed: () async {
-              Navigator.pop(context); // Cerramos la ventanita
+              Navigator.pop(ctx);
               await _ejecutarBorradoTotal();
             },
-            child: const Text('Sí, eliminar todo', style: TextStyle(color: Colors.white)),
+            child: const Text('Sí, eliminar todo'),
           ),
         ],
       ),
@@ -138,157 +125,136 @@ class _PantallaEditarPerfilState extends State<PantallaEditarPerfil> {
   }
 
   Future<void> _ejecutarBorradoTotal() async {
-    setState(() { _guardando = true; });
-
+    setState(() => _guardando = true);
     try {
-      User? usuario = FirebaseAuth.instance.currentUser;
+      final usuario = _auth.currentUser;
       if (usuario != null) {
-        // 1. Borramos su "ficha" de nuestra base de datos
-        await FirebaseFirestore.instance.collection('clientes').doc(usuario.uid).delete();
-        
-        // 2. Borramos la cuenta de acceso de Firebase Auth
+        await _db
+            .collection(Colecciones.clientes).doc(usuario.uid).delete();
         await usuario.delete();
-        
-        // 3. Lo mandamos a la pantalla de bienvenida
         if (mounted) {
           Navigator.pushAndRemoveUntil(
             context,
-            MaterialPageRoute(builder: (context) => const PantallaBienvenida()),
-            (Route<dynamic> route) => false, // Esto destruye todo el historial para que no pueda volver atrás
+            AppRoutes.fade(const PantallaBienvenida()),
+            (_) => false,
           );
         }
       }
     } on FirebaseAuthException catch (e) {
-      // Firebase a veces pide que el usuario vuelva a iniciar sesión antes de borrar la cuenta por seguridad
       if (e.code == 'requires-recent-login') {
-        _mostrarMensaje('Por seguridad, cierra sesión y vuelve a entrar para borrar tu cuenta', Colors.orange);
+        _msg('Por seguridad, cierra sesión y vuelve a entrar para eliminar tu cuenta',
+            AppTheme.warning);
       } else {
-        _mostrarMensaje('Error al borrar la cuenta', Colors.redAccent);
+        _msg('Error al borrar la cuenta', AppTheme.error);
       }
     } finally {
-      if (mounted) setState(() { _guardando = false; });
+      if (mounted) setState(() => _guardando = false);
     }
   }
 
-  // Método auxiliar para los mensajes inferiores
-  void _mostrarMensaje(String texto, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(texto), backgroundColor: color),
-    );
-  }
+  void _msg(String t, Color c) => UiUtils.mostrarMensaje(context, t, c);
+
+  // ─── UI ─────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('MI PERFIL', style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.black,
-      ),
+      appBar: AppBar(title: const Text('Mi perfil')),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(30),
+          padding: const EdgeInsets.all(28),
           child: Column(
             children: [
-              // --- Zona de la Foto de Perfil ---
-              GestureDetector(
-                onTap: _guardando ? null : _seleccionarImagen,
-                child: Stack(
-                  alignment: Alignment.bottomRight,
-                  children: [
-                    CircleAvatar(
-                      radius: 60,
-                      backgroundColor: Colors.grey[800],
-                      // Lógica de visualización:
-                      // 1. Si acaba de elegir una foto de la galería, mostramos el archivo.
-                      // 2. Si no, pero tenía una foto en Firebase, la decodificamos de Base64 a Imagen.
-                      // 3. Si no tiene nada de nada, mostramos el icono por defecto.
-                      backgroundImage: _imagenSeleccionada != null
-                          ? FileImage(_imagenSeleccionada!)
-                          : (widget.fotoBase64Actual != null && widget.fotoBase64Actual!.isNotEmpty)
-                              ? MemoryImage(base64Decode(widget.fotoBase64Actual!)) as ImageProvider
-                              : null,
-                      child: (_imagenSeleccionada == null && (widget.fotoBase64Actual == null || widget.fotoBase64Actual!.isEmpty))
-                          ? const Icon(Icons.person, size: 60, color: Colors.white24)
-                          : null,
-                    ),
-                    // Iconito superpuesto para indicar que se puede editar
-                    const CircleAvatar(
-                      radius: 18,
-                      backgroundColor: Colors.amber,
-                      child: Icon(Icons.camera_alt, color: Colors.black, size: 20),
-                    ),
-                  ],
+              // ─── Foto de perfil ──────────────────────────────────────────
+              Center(
+                child: GestureDetector(
+                  onTap: _guardando ? null : _seleccionarImagen,
+                  child: Stack(
+                    alignment: Alignment.bottomRight,
+                    children: [
+                      CircleAvatar(
+                        radius: 64,
+                        backgroundColor: AppTheme.surfaceHigh,
+                        backgroundImage: _imagenSeleccionada != null
+                            ? FileImage(_imagenSeleccionada!)
+                            : (widget.fotoBase64Actual != null &&
+                                    widget.fotoBase64Actual!.isNotEmpty)
+                                ? MemoryImage(base64Decode(widget.fotoBase64Actual!))
+                                    as ImageProvider
+                                : null,
+                        child: (_imagenSeleccionada == null &&
+                                (widget.fotoBase64Actual == null ||
+                                    widget.fotoBase64Actual!.isEmpty))
+                            ? Icon(Icons.person, size: 64, color: AppTheme.textHint)
+                            : null,
+                      ),
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(
+                          color:  AppTheme.gold,
+                          shape:  BoxShape.circle,
+                        ),
+                        child: Icon(Icons.camera_alt_outlined,
+                            color: AppTheme.black, size: 18),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(height: 40),
+              const SizedBox(height: 36),
 
-              // --- Formulario de Datos ---
+              // ─── Formulario ──────────────────────────────────────────────
               TextField(
                 controller: _nombreCtrl,
-                maxLength: 15,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Nombre',
-                  labelStyle: const TextStyle(color: Colors.amber),
-                  enabledBorder: OutlineInputBorder(borderSide: const BorderSide(color: Colors.white24), borderRadius: BorderRadius.circular(10)),
-                  focusedBorder: OutlineInputBorder(borderSide: const BorderSide(color: Colors.amber), borderRadius: BorderRadius.circular(10)),
-                  prefixIcon: const Icon(Icons.badge, color: Colors.amber),
-                  counterText: "",
+                maxLength:  15,
+                style: TextStyle(color: AppTheme.textPrimary),
+                decoration: const InputDecoration(
+                  labelText:   'Nombre',
+                  prefixIcon:  Icon(Icons.badge_outlined),
+                  counterText: '',
                 ),
               ),
-              const SizedBox(height: 20),
-
+              const SizedBox(height: 16),
               TextField(
-                controller: _telefonoCtrl,
+                controller:  _telefonoCtrl,
                 keyboardType: TextInputType.number,
-                maxLength: 9,
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  labelText: 'Teléfono',
-                  labelStyle: const TextStyle(color: Colors.amber),
-                  enabledBorder: OutlineInputBorder(borderSide: const BorderSide(color: Colors.white24), borderRadius: BorderRadius.circular(10)),
-                  focusedBorder: OutlineInputBorder(borderSide: const BorderSide(color: Colors.amber), borderRadius: BorderRadius.circular(10)),
-                  prefixIcon: const Icon(Icons.phone_android, color: Colors.amber),
-                  counterText: "",
+                maxLength:   9,
+                style: TextStyle(color: AppTheme.textPrimary),
+                decoration: const InputDecoration(
+                  labelText:   'Teléfono',
+                  prefixIcon:  Icon(Icons.phone_outlined),
+                  counterText: '',
                 ),
               ),
-              const SizedBox(height: 30),
+              const SizedBox(height: 28),
 
-              // --- Botón de Guardar ---
-              SizedBox(
-                width: double.infinity, 
-                height: 50, 
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.amber, 
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
-                  ), 
-                  onPressed: _guardando ? null : _guardarCambios, 
-                  child: _guardando 
-                    ? const CircularProgressIndicator(color: Colors.black) 
-                    : const Text('GUARDAR CAMBIOS', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 16))
-                )
+              ElevatedButton(
+                onPressed: _guardando ? null : _guardarCambios,
+                child: _guardando
+                    ? SizedBox(
+                        height: 20, width: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: AppTheme.black))
+                    : const Text('GUARDAR CAMBIOS'),
               ),
-              
-              const SizedBox(height: 50),
-              const Divider(color: Colors.white24),
-              const SizedBox(height: 20),
-              
-              // --- Botón de Peligro ---
+
+              const SizedBox(height: 48),
+              const Divider(),
+              const SizedBox(height: 16),
+
+              // ─── Zona peligrosa ──────────────────────────────────────────
               SizedBox(
-                width: double.infinity, 
-                height: 50, 
+                width: double.infinity, height: 50,
                 child: OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: Colors.redAccent, 
-                    side: const BorderSide(color: Colors.redAccent), 
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))
-                  ), 
-                  icon: const Icon(Icons.delete_forever), 
-                  label: const Text('ELIMINAR MI CUENTA', style: TextStyle(fontWeight: FontWeight.bold)), 
-                  onPressed: _guardando ? null : _confirmarBorrarCuenta
-                )
-              )
+                    foregroundColor: AppTheme.error,
+                    side: const BorderSide(color: AppTheme.error),
+                  ),
+                  icon: const Icon(Icons.delete_forever_outlined),
+                  label: const Text('ELIMINAR MI CUENTA'),
+                  onPressed: _guardando ? null : _confirmarBorrarCuenta,
+                ),
+              ),
             ],
           ),
         ),

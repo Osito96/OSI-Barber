@@ -1,7 +1,12 @@
-import 'package:flutter/material.dart';
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+
 import 'pantalla_chat.dart';
-import 'dart:convert'; // Necesario para transformar la foto de perfil (texto base64) en una imagen real
+import '../core/app_routes.dart';
+import '../core/app_theme.dart';
+import '../core/constants.dart';
 
 class PantallaAdmin extends StatefulWidget {
   const PantallaAdmin({super.key});
@@ -11,225 +16,251 @@ class PantallaAdmin extends StatefulWidget {
 }
 
 class _PantallaAdminState extends State<PantallaAdmin> {
-  // Por defecto, al abrir la agenda queremos ver las citas de "hoy"
   DateTime _diaVer = DateTime.now();
+
+  FirebaseFirestore get _db => FirebaseFirestore.instance;
 
   @override
   Widget build(BuildContext context) {
-    // Usamos DefaultTabController para crear las 3 pestañas deslizables de forma sencilla
     return DefaultTabController(
       length: 3,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('PANEL DE BARBERO', style: TextStyle(fontWeight: FontWeight.bold)),
-          backgroundColor: Colors.black,
+          title: const Text('Panel de barbero'),
           bottom: TabBar(
-            indicatorColor: Colors.amber,
-            labelColor: Colors.amber,
-            unselectedLabelColor: Colors.white54,
             tabs: [
-              const Tab(icon: Icon(Icons.calendar_month), text: 'Agenda'),
-              const Tab(icon: Icon(Icons.emoji_events), text: 'Ranking'),
-              
-              // --- Pestaña de Mensajes con "Bolita Roja" de notificaciones ---
               Tab(
-                // Escuchamos Firebase en tiempo real para ver si hay mensajes nuevos
+                text: 'Agenda',
                 icon: StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance.collection('chats').where('noLeidosAdmin', isGreaterThan: 0).snapshots(),
-                  builder: (context, snapshot) {
-                    int totalNoLeidos = 0;
-                    
-                    // Sumamos todos los mensajes pendientes de todos los clientes
-                    if (snapshot.hasData) {
-                      for (var doc in snapshot.data!.docs) {
-                        var data = doc.data() as Map<String, dynamic>;
-                        totalNoLeidos += (data['noLeidosAdmin'] ?? 0) as int;
-                      }
-                    }
-                    
-                    // Si hay mensajes, mostramos la bolita roja pura. Si no, solo el icono normal.
-                    return totalNoLeidos > 0
+                  stream: _db
+                      .collection(Colecciones.citas)
+                      .where(Campos.estado, isEqualTo: EstadoCita.pendiente)
+                      .snapshots(),
+                  builder: (ctx, snap) {
+                    final total = snap.hasData ? snap.data!.docs.length : 0;
+                    return total > 0
                         ? Badge(
-                            backgroundColor: const Color.fromARGB(255, 236, 22, 6), 
-                            label: Text('$totalNoLeidos', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                            child: const Icon(Icons.forum),
+                            backgroundColor: AppTheme.error,
+                            label: Text('$total',
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 10)),
+                            child: const Icon(Icons.calendar_month_outlined),
                           )
-                        : const Icon(Icons.forum);
+                        : const Icon(Icons.calendar_month_outlined);
                   },
                 ),
+              ),
+              const Tab(
+                icon: Icon(Icons.emoji_events_outlined),
+                text: 'Ranking',
+              ),
+              Tab(
                 text: 'Mensajes',
+                icon: StreamBuilder<QuerySnapshot>(
+                  stream: _db
+                      .collection(Colecciones.chats)
+                      .where(Campos.noLeidosAdmin, isGreaterThan: 0)
+                      .snapshots(),
+                  builder: (ctx, snap) {
+                    int total = 0;
+                    if (snap.hasData) {
+                      for (var doc in snap.data!.docs) {
+                        final d = doc.data() as Map<String, dynamic>;
+                        total += _leerEntero(d[Campos.noLeidosAdmin]);
+                      }
+                    }
+                    return total > 0
+                        ? Badge(
+                            backgroundColor: AppTheme.error,
+                            label: Text('$total',
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 10)),
+                            child: const Icon(Icons.forum_outlined),
+                          )
+                        : const Icon(Icons.forum_outlined);
+                  },
+                ),
               ),
             ],
           ),
         ),
         body: TabBarView(
           children: [
-            _construirPestanaAgenda(),
-            _construirPestanaRanking(),
-            _construirPestanaChats(),
+            _pestanaAgenda(),
+            _pestanaRanking(),
+            _pestanaChats(),
           ],
         ),
       ),
     );
   }
 
-  // --- 1. Pestaña de Agenda (Gestión de citas diaria) ---
-  Widget _construirPestanaAgenda() {
-    // Calculamos el inicio y el final del día seleccionado para filtrar en la base de datos
-    DateTime inicio = DateTime(_diaVer.year, _diaVer.month, _diaVer.day, 0, 0);
-    DateTime fin = DateTime(_diaVer.year, _diaVer.month, _diaVer.day, 23, 59);
-    
-    // Creamos un ID único para el día de hoy (ejemplo: "2023-10-05") para saber si lo hemos bloqueado
-    String idDia = "${_diaVer.year}-${_diaVer.month.toString().padLeft(2, '0')}-${_diaVer.day.toString().padLeft(2, '0')}";
+  // ─── Agenda ─────────────────────────────────────────────────────────────────
+
+  Widget _pestanaAgenda() {
+    final inicio = _inicioDia(_diaVer);
+    final fin = _finDia(_diaVer);
+    final idDia = _idDia(_diaVer);
 
     return Column(
       children: [
-        // Selector de Fecha superior
+        // Selector de fecha
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
-          color: Colors.grey[900],
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: const BoxDecoration(
+            color:  AppTheme.surface,
+            border: Border(bottom: BorderSide(color: AppTheme.divider, width: 0.5)),
+          ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'Citas del: ${_diaVer.day}/${_diaVer.month}/${_diaVer.year}',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                'Citas del ${_diaVer.day}/${_diaVer.month}/${_diaVer.year}',
+                style: AppTheme.titleSmall,
               ),
               IconButton(
-                icon: const Icon(Icons.edit_calendar, color: Colors.amber),
+                icon: const Icon(Icons.edit_calendar_outlined),
                 onPressed: () async {
-                  // Abrimos el calendario nativo para saltar a otro día
-                  DateTime? pick = await showDatePicker(
+                  final pick = await showDatePicker(
                     context: context,
                     initialDate: _diaVer,
-                    firstDate: DateTime.now().subtract(const Duration(days: 60)), // Dejamos ver hasta 2 meses atrás
-                    lastDate: DateTime.now().add(const Duration(days: 90)), // Y hasta 3 meses en el futuro
+                    firstDate: DateTime.now().subtract(const Duration(days: 60)),
+                    lastDate:  DateTime.now().add(const Duration(days: 90)),
                   );
                   if (pick != null) setState(() => _diaVer = pick);
                 },
-              )
+              ),
             ],
           ),
         ),
-
-        // Interruptor para bloquear el día completo (ideal para festivos o imprevistos)
+        // Toggle bloqueo del día
         StreamBuilder<DocumentSnapshot>(
-          stream: FirebaseFirestore.instance.collection('dias_bloqueados').doc(idDia).snapshots(),
-          builder: (context, snapshot) {
-            bool estaBloqueado = false;
-            if (snapshot.hasData && snapshot.data!.exists) {
-              estaBloqueado = snapshot.data!['bloqueado'] ?? false;
-            }
-
+          stream: _db
+              .collection(Colecciones.diasBloqueados).doc(idDia).snapshots(),
+          builder: (ctx, snap) {
+            final bloqueado = snap.hasData && snap.data!.exists
+                ? snap.data![Campos.bloqueado] as bool? ?? false
+                : false;
             return Container(
-              color: estaBloqueado ? Colors.red[900]?.withOpacity(0.3) : Colors.black,
+              color: bloqueado
+                  ? AppTheme.error.withValues(alpha: 0.1)
+                  : AppTheme.success.withValues(alpha: 0.05),
               child: SwitchListTile(
-                activeColor: Colors.redAccent,
-                inactiveThumbColor: Colors.green,
-                inactiveTrackColor: Colors.green.withOpacity(0.3),
                 title: Text(
-                  estaBloqueado ? '🚫 DÍA BLOQUEADO (No se puede reservar)' : '✅ DÍA ABIERTO (Reservas activas)',
-                  style: TextStyle(
-                    color: estaBloqueado ? Colors.redAccent : Colors.green,
-                    fontWeight: FontWeight.bold,
+                  bloqueado
+                      ? '🚫 Día bloqueado — sin reservas'
+                      : '✅ Día abierto — reservas activas',
+                  style: AppTheme.titleSmall.copyWith(
+                    color: bloqueado ? AppTheme.error : AppTheme.success,
                   ),
                 ),
-                value: estaBloqueado,
-                onChanged: (bool valor) async {
-                  if (valor) {
-                    // Bloqueamos: creamos el documento en Firebase
-                    await FirebaseFirestore.instance.collection('dias_bloqueados').doc(idDia).set({'bloqueado': true});
+                value:    bloqueado,
+                onChanged: (val) async {
+                  if (val) {
+                    await _db
+                        .collection(Colecciones.diasBloqueados)
+                        .doc(idDia).set({Campos.bloqueado: true});
                   } else {
-                    // Desbloqueamos: borramos el documento
-                    await FirebaseFirestore.instance.collection('dias_bloqueados').doc(idDia).delete();
+                    await _db
+                        .collection(Colecciones.diasBloqueados).doc(idDia).delete();
                   }
                 },
               ),
             );
           },
         ),
-
-        // Lista de las citas programadas para el día seleccionado
+        _panelCitasPendientes(),
+        // Lista de citas
         Expanded(
           child: StreamBuilder<QuerySnapshot>(
-            // Filtramos las citas que caen exactamente entre las 00:00 y las 23:59 del día elegido
-            stream: FirebaseFirestore.instance
-                .collection('citas')
-                .where('fecha', isGreaterThanOrEqualTo: Timestamp.fromDate(inicio))
-                .where('fecha', isLessThanOrEqualTo: Timestamp.fromDate(fin))
-                .orderBy('fecha')
+            stream: _db
+                .collection(Colecciones.citas)
+                .where(Campos.fecha, isGreaterThanOrEqualTo: Timestamp.fromDate(inicio))
+                .where(Campos.fecha, isLessThanOrEqualTo:    Timestamp.fromDate(fin))
+                .orderBy(Campos.fecha)
                 .snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
+            builder: (ctx, snap) {
+              if (snap.connectionState == ConnectionState.waiting) {
                 return const Center(child: CircularProgressIndicator());
               }
-              if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                return const Center(
-                  child: Text('No hay citas en este día.', style: TextStyle(color: Colors.white54)),
-                );
+              if (!snap.hasData || snap.data!.docs.isEmpty) {
+                return Center(
+                    child: Text('No hay citas este día.', style: AppTheme.bodyMedium));
               }
-
               return ListView.builder(
-                padding: const EdgeInsets.all(10),
-                itemCount: snapshot.data!.docs.length,
-                itemBuilder: (context, index) {
-                  var cita = snapshot.data!.docs[index];
-                  var datos = cita.data() as Map<String, dynamic>;
-                  String estado = datos['estado'] ?? 'pendiente';
-                  String clienteId = datos['clienteId'];
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+                itemCount: snap.data!.docs.length,
+                itemBuilder: (ctx, i) {
+                    final cita = snap.data!.docs[i];
+                    final datos = cita.data() as Map<String, dynamic>;
+                    final estado =
+                        datos[Campos.estado] as String? ?? EstadoCita.pendiente;
+                    final clienteId = datos[Campos.clienteId] as String;
+                    final nombreCliente = datos[Campos.nombreCliente] as String? ??
+                        'Cliente sin nombre';
+                  final borderColor = estado == EstadoCita.pendiente
+                      ? AppTheme.gold
+                      : _colorEstado(estado);
 
-                  return Card(
-                    color: Colors.black,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      // El borde de la tarjeta cambia de color según el estado de la cita
-                      side: BorderSide(
-                        color: estado == 'completada' ? Colors.green : estado == 'ausente' ? Colors.orange : Colors.amber,
-                        width: 1,
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color:        AppTheme.surface,
+                        borderRadius: BorderRadius.circular(AppTheme.radiusL),
+                        border: Border.all(color: borderColor, width: 1),
                       ),
-                    ),
-                    margin: const EdgeInsets.only(bottom: 15),
-                    child: Padding(
-                      padding: const EdgeInsets.all(15),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(datos['hora'], style: const TextStyle(color: Colors.amber, fontSize: 22, fontWeight: FontWeight.bold)),
-                              _etiquetaEstado(estado),
-                            ],
-                          ),
-                          const SizedBox(height: 5),
-                          Text(datos['nombreCliente'], style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                          Text('${datos['servicio']} - ${datos['duracion']} min', style: const TextStyle(color: Colors.white70)),
-                          
-                          // Si la cita aún no ha pasado, mostramos los botones de acción
-                          if (estado == 'pendiente') ...[
-                            const Divider(color: Colors.white24, height: 20),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
                             Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                // Botón: Cliente asistió (Suma punto V)
-                                IconButton(
-                                  icon: const Icon(Icons.check_circle, color: Colors.green, size: 30), 
-                                  onPressed: () => _actualizarEstadoCita(cita.id, clienteId, 'completada', 'citasV')
-                                ),
-                                // Botón: Cliente no apareció (Suma falta X)
-                                IconButton(
-                                  icon: const Icon(Icons.warning_rounded, color: Colors.orange, size: 30), 
-                                  onPressed: () => _actualizarEstadoCita(cita.id, clienteId, 'ausente', 'citasX')
-                                ),
-                                // Botón: Cancelar y borrar la cita
-                                IconButton(
-                                  icon: const Icon(Icons.delete_forever, color: Colors.redAccent, size: 30), 
-                                  onPressed: () => _confirmarBorrado(cita.id)
-                                )
+                                Text(datos[Campos.hora] as String? ?? '',
+                                    style: AppTheme.titleLarge.copyWith(
+                                        color: AppTheme.gold)),
+                                _chipEstado(estado),
                               ],
-                            )
-                          ]
-                        ],
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                Icon(Icons.person_outline_rounded,
+                                    color: AppTheme.gold, size: 16),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: Text('Cliente: $nombreCliente',
+                                      style: AppTheme.titleSmall),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${datos[Campos.servicio] ?? 'Servicio'} · ${datos[Campos.duracion] ?? 0} min',
+                              style: AppTheme.bodyMedium,
+                            ),
+                            if (estado == EstadoCita.pendiente) ...[
+                              const SizedBox(height: 14),
+                              const Divider(),
+                              const SizedBox(height: 4),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                children: [
+                                  _actionBtn(Icons.check_circle_outline, AppTheme.success,
+                                      '¿Completada?', () => _actualizarCita(
+                                          cita.id, clienteId, EstadoCita.completada, Campos.citasV)),
+                                  _actionBtn(Icons.warning_amber_rounded, AppTheme.warning,
+                                      '¿No asistió?', () => _actualizarCita(
+                                          cita.id, clienteId, EstadoCita.ausente, Campos.citasX)),
+                                  _actionBtn(Icons.delete_outline_rounded, AppTheme.error,
+                                      'Cancelar', () => _confirmarBorrado(cita.id)),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
                     ),
                   );
@@ -237,59 +268,262 @@ class _PantallaAdminState extends State<PantallaAdmin> {
               );
             },
           ),
-        )
+        ),
       ],
     );
   }
 
-  // --- 2. Pestaña de Ranking (Gamificación y fiabilidad) ---
-  Widget _construirPestanaRanking() {
+  Widget _panelCitasPendientes() {
     return StreamBuilder<QuerySnapshot>(
-      // Traemos a todos los clientes ordenados por los que más han venido (citasV)
-      stream: FirebaseFirestore.instance.collection('clientes').orderBy('citasV', descending: true).snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+      stream: _db
+          .collection(Colecciones.citas)
+          .where(Campos.estado, isEqualTo: EstadoCita.pendiente)
+          .snapshots(),
+      builder: (ctx, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const LinearProgressIndicator(minHeight: 2);
+        }
+
+        final conteosPorDia = <DateTime, int>{};
+        if (snap.hasData) {
+          for (final doc in snap.data!.docs) {
+            final datos = doc.data() as Map<String, dynamic>;
+            final fecha = _leerFecha(datos[Campos.fecha]);
+            if (fecha == null) continue;
+            final dia = DateTime(fecha.year, fecha.month, fecha.day);
+            conteosPorDia[dia] = (conteosPorDia[dia] ?? 0) + 1;
+          }
+        }
+
+        final dias = conteosPorDia.keys.toList()
+          ..sort((a, b) => a.compareTo(b));
+
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+          decoration: const BoxDecoration(
+            color: AppTheme.black,
+            border: Border(
+              bottom: BorderSide(color: AppTheme.divider, width: 0.5),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.pending_actions_outlined,
+                      color: AppTheme.error, size: 18),
+                  const SizedBox(width: 8),
+                  Text('Citas pendientes', style: AppTheme.titleSmall),
+                ],
+              ),
+              const SizedBox(height: 10),
+              if (dias.isEmpty)
+                Text('No hay citas pendientes', style: AppTheme.bodySmall)
+              else
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: dias.map((dia) {
+                      final seleccionada = _mismoDia(dia, _diaVer);
+                      final total = conteosPorDia[dia] ?? 0;
+
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+                          onTap: () => setState(() => _diaVer = dia),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: seleccionada
+                                  ? AppTheme.goldSoft
+                                  : AppTheme.surface,
+                              borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+                              border: Border.all(
+                                color: seleccionada
+                                    ? AppTheme.gold
+                                    : AppTheme.divider,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: const BoxDecoration(
+                                    color: AppTheme.error,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '${_formatoDiaCorto(dia)} · $total',
+                                  style: AppTheme.titleSmall.copyWith(
+                                    color: seleccionada
+                                        ? AppTheme.gold
+                                        : AppTheme.textPrimary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _chipEstado(String estado) {
+    final color = _colorEstado(estado);
+    final label = _textoEstado(estado);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color:        color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+        border:       Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Text(label,
+          style: AppTheme.bodySmall.copyWith(
+              color: color, fontWeight: FontWeight.w600)),
+    );
+  }
+
+  Color _colorEstado(String estado) {
+    if (estado == EstadoCita.completada) return AppTheme.success;
+    if (estado == EstadoCita.ausente) return AppTheme.warning;
+    return AppTheme.textHint;
+  }
+
+  String _textoEstado(String estado) {
+    if (estado == EstadoCita.completada) return 'Completada';
+    if (estado == EstadoCita.ausente) return 'No presentado';
+    return 'Pendiente';
+  }
+
+  int _leerEntero(dynamic valor) {
+    if (valor is int) return valor;
+    if (valor is num) return valor.toInt();
+    if (valor is String) return int.tryParse(valor) ?? 0;
+    return 0;
+  }
+
+  DateTime? _leerFecha(dynamic valor) {
+    if (valor is Timestamp) return valor.toDate();
+    if (valor is DateTime) return valor;
+    return null;
+  }
+
+  DateTime _inicioDia(DateTime fecha) {
+    return DateTime(fecha.year, fecha.month, fecha.day, 0, 0);
+  }
+
+  DateTime _finDia(DateTime fecha) {
+    return DateTime(fecha.year, fecha.month, fecha.day, 23, 59);
+  }
+
+  String _idDia(DateTime fecha) {
+    return '${fecha.year}-${fecha.month.toString().padLeft(2, '0')}-${fecha.day.toString().padLeft(2, '0')}';
+  }
+
+  String _formatoDiaCorto(DateTime fecha) {
+    final dia = fecha.day.toString().padLeft(2, '0');
+    final mes = fecha.month.toString().padLeft(2, '0');
+    return '$dia/$mes';
+  }
+
+  bool _mismoDia(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  Widget _actionBtn(IconData icono, Color color, String tooltip, VoidCallback onTap) {
+    return Tooltip(
+      message: tooltip,
+      child: IconButton(
+        icon:      Icon(icono, color: color, size: 28),
+        onPressed: onTap,
+      ),
+    );
+  }
+
+  // ─── Ranking ─────────────────────────────────────────────────────────────────
+
+  Widget _pestanaRanking() {
+    return StreamBuilder<QuerySnapshot>(
+      stream: _db
+          .collection(Colecciones.clientes)
+          .orderBy(Campos.citasV, descending: true)
+          .snapshots(),
+      builder: (ctx, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return const Center(child: Text('No hay clientes.'));
+        if (!snap.hasData || snap.data!.docs.isEmpty) {
+          return Center(child: Text('No hay clientes.', style: AppTheme.bodyMedium));
         }
-
         return ListView.builder(
-          padding: const EdgeInsets.all(10),
-          itemCount: snapshot.data!.docs.length,
-          itemBuilder: (context, index) {
-            var cliente = snapshot.data!.docs[index].data() as Map<String, dynamic>;
-            String nombre = cliente['nombre'] ?? 'Desconocido';
-            int citasV = cliente['citasV'] ?? 0;
-            int citasX = cliente['citasX'] ?? 0;
+          padding: const EdgeInsets.all(16),
+          itemCount: snap.data!.docs.length,
+          itemBuilder: (ctx, i) {
+            final c      = snap.data!.docs[i].data() as Map<String, dynamic>;
+            final nombre = c[Campos.nombre] as String? ?? 'Desconocido';
+            final citasV = _leerEntero(c[Campos.citasV]);
+            final citasX = _leerEntero(c[Campos.citasX]);
 
-            // Premiamos visualmente a los 3 mejores clientes con medallas de oro, plata y bronce
-            Widget iconoPosicion = Text(
-              '#${index + 1}',
-              style: const TextStyle(color: Colors.white54, fontSize: 18, fontWeight: FontWeight.bold),
-            );
-            if (index == 0) iconoPosicion = const Icon(Icons.workspace_premium, color: Colors.amber, size: 30);
-            if (index == 1) iconoPosicion = const Icon(Icons.workspace_premium, color: Color(0xFFC0C0C0), size: 30);
-            if (index == 2) iconoPosicion = const Icon(Icons.workspace_premium, color: Color(0xFFCD7F32), size: 30);
+            Widget posicion;
+            if (i == 0) posicion = const Icon(Icons.workspace_premium, color: AppTheme.gold, size: 28);
+            else if (i == 1) posicion = const Icon(Icons.workspace_premium, color: Color(0xFFC0C0C0), size: 28);
+            else if (i == 2) posicion = const Icon(Icons.workspace_premium, color: Color(0xFFCD7F32), size: 28);
+            else posicion = Text('#${i + 1}',
+                style: AppTheme.bodyMedium.copyWith(fontWeight: FontWeight.w700));
 
-            return Card(
-              color: Colors.grey[900],
-              margin: const EdgeInsets.only(bottom: 10),
-              child: ListTile(
-                leading: iconoPosicion,
-                title: Text(nombre, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
-                subtitle: Text('Tel: ${cliente['telefono'] ?? '---'}', style: const TextStyle(color: Colors.white54)),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color:        AppTheme.surface,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusM),
+                  border:       Border.all(color: AppTheme.divider, width: 0.5),
+                ),
+                child: Row(
                   children: [
-                    const Icon(Icons.check_circle, color: Colors.green, size: 16),
-                    const SizedBox(width: 4),
-                    Text('$citasV', style: const TextStyle(color: Colors.green, fontSize: 18, fontWeight: FontWeight.bold)),
-                    const SizedBox(width: 15),
-                    const Icon(Icons.cancel, color: Colors.redAccent, size: 16),
-                    const SizedBox(width: 4),
-                    Text('$citasX', style: const TextStyle(color: Colors.redAccent, fontSize: 18, fontWeight: FontWeight.bold)),
+                    SizedBox(width: 36, child: Center(child: posicion)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(nombre, style: AppTheme.titleSmall),
+                          Text(c[Campos.telefono] ?? '---', style: AppTheme.bodySmall),
+                        ],
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        Icon(Icons.check_circle_outline,
+                            color: AppTheme.success, size: 16),
+                        const SizedBox(width: 3),
+                        Text('$citasV',
+                            style: AppTheme.titleSmall.copyWith(color: AppTheme.success)),
+                        const SizedBox(width: 14),
+                        Icon(Icons.cancel_outlined, color: AppTheme.error, size: 16),
+                        const SizedBox(width: 3),
+                        Text('$citasX',
+                            style: AppTheme.titleSmall.copyWith(color: AppTheme.error)),
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -300,84 +534,49 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     );
   }
 
-  // --- 3. Pestaña de Bandeja de Chats ---
-  Widget _construirPestanaChats() {
+  // ─── Chats ────────────────────────────────────────────────────────────────────
+
+  Widget _pestanaChats() {
     return StreamBuilder<QuerySnapshot>(
-      // Escuchamos la colección de chats ordenados para que los más recientes salgan arriba
-      stream: FirebaseFirestore.instance.collection('chats').orderBy('timestamp', descending: true).snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator(color: Colors.amber));
+      stream: _db
+          .collection(Colecciones.chats)
+          .orderBy(Campos.timestamp, descending: true)
+          .snapshots(),
+      builder: (ctx, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
         }
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return const Center(child: Text('No hay mensajes nuevos.'));
+        if (!snap.hasData || snap.data!.docs.isEmpty) {
+          return Center(child: Text('No hay mensajes.', style: AppTheme.bodyMedium));
         }
-
         return ListView.builder(
-          padding: const EdgeInsets.all(10),
-          itemCount: snapshot.data!.docs.length,
-          itemBuilder: (context, index) {
-            var chatData = snapshot.data!.docs[index].data() as Map<String, dynamic>;
-            String clienteId = chatData['clienteId'];
-            String ultimoMensaje = chatData['ultimoMensaje'] ?? '';
-            int noLeidos = chatData['noLeidosAdmin'] ?? 0;
+          padding: const EdgeInsets.all(12),
+          itemCount: snap.data!.docs.length,
+          itemBuilder: (ctx, i) {
+            final chat         = snap.data!.docs[i].data() as Map<String, dynamic>;
+            final clienteId    = chat[Campos.clienteId] as String;
+            final ultimoMsg    = chat[Campos.ultimoMensaje] as String? ?? '';
+            final noLeidos     = _leerEntero(chat[Campos.noLeidosAdmin]);
 
-            // Como en el documento de 'chats' no tenemos la foto, hacemos una segunda petición
-            // rápida a 'clientes' con este FutureBuilder para sacar su avatar y su nombre real.
-            return FutureBuilder<DocumentSnapshot>(
-              future: FirebaseFirestore.instance.collection('clientes').doc(clienteId).get(),
-              builder: (context, userSnapshot) {
-                String nombreCliente = 'Cargando...';
-                String fotoPerfilText = ''; 
+            return StreamBuilder<DocumentSnapshot>(
+              stream: _db.collection(Colecciones.clientes).doc(clienteId).snapshots(),
+              builder: (ctx, clienteSnap) {
+                final datosCliente = clienteSnap.hasData && clienteSnap.data!.exists
+                    ? clienteSnap.data!.data() as Map<String, dynamic>
+                    : <String, dynamic>{};
+                final nombre = (datosCliente[Campos.nombre] as String?) ??
+                    (chat[Campos.nombreCliente] as String?) ??
+                    'Cliente';
+                final foto = (datosCliente[Campos.fotoPerfil] as String?) ??
+                    (chat[Campos.fotoPerfil] as String?) ??
+                    '';
 
-                if (userSnapshot.hasData && userSnapshot.data!.exists) {
-                  nombreCliente = userSnapshot.data!['nombre'] ?? 'Cliente';
-                  fotoPerfilText = userSnapshot.data!['fotoPerfil'] ?? '';
-                }
-
-                return Card(
-                  color: Colors.grey[900],
-                  margin: const EdgeInsets.only(bottom: 10),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: Colors.amber,
-                      radius: 25,
-                      // Si tiene foto la decodificamos de Base64, si no, le ponemos el icono por defecto
-                      backgroundImage: fotoPerfilText.isNotEmpty ? MemoryImage(base64Decode(fotoPerfilText)) : null,
-                      child: fotoPerfilText.isEmpty ? const Icon(Icons.person, color: Colors.black) : null,
-                    ),
-                    title: Text(
-                      nombreCliente,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: noLeidos > 0 ? FontWeight.bold : FontWeight.normal,
-                      ),
-                    ),
-                    subtitle: Text(
-                      ultimoMensaje,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: noLeidos > 0 ? Colors.white : Colors.white54),
-                    ),
-                    trailing: noLeidos > 0
-                        ? Badge(
-                            label: Text('$noLeidos', style: const TextStyle(color: Colors.white)),
-                            child: const Icon(Icons.chevron_right, color: Colors.amber),
-                          )
-                        : const Icon(Icons.chevron_right, color: Colors.amber),
-                    onTap: () {
-                      // Al pulsar, entramos a la conversación completa
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => PantallaChat(
-                            clienteId: clienteId,
-                            nombreDestinatario: nombreCliente,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
+                return _tarjetaChat(
+                  clienteId: clienteId,
+                  nombre: nombre,
+                  foto: foto,
+                  ultimoMensaje: ultimoMsg,
+                  noLeidos: noLeidos,
                 );
               },
             );
@@ -387,55 +586,114 @@ class _PantallaAdminState extends State<PantallaAdmin> {
     );
   }
 
-  // --- Funciones Auxiliares ---
+  // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-  // Devuelve un textito con el color correcto según cómo fue la cita
-  Widget _etiquetaEstado(String estado) {
-    if (estado == 'completada') {
-      return const Text('COMPLETADA', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold));
-    }
-    if (estado == 'ausente') {
-      return const Text('NO PRESENTADO', style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold));
-    }
-    return const Text('PENDIENTE', style: TextStyle(color: Colors.white54, fontWeight: FontWeight.bold));
-  }
-
-  // Al pulsar los botones de la agenda, guardamos el resultado y le sumamos puntos/faltas al cliente
-  Future<void> _actualizarEstadoCita(String citaId, String clienteId, String nuevoEstado, String campoPuntos) async {
-    await FirebaseFirestore.instance.collection('citas').doc(citaId).update({'estado': nuevoEstado});
-    await FirebaseFirestore.instance.collection('clientes').doc(clienteId).update({
-      campoPuntos: FieldValue.increment(1) // Suma 1 a citasV o citasX automáticamente
-    });
-    
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(nuevoEstado == 'completada' ? '✅ Cita completada. Puntos sumados.' : '⚠️ Falta registrada.'),
-          backgroundColor: nuevoEstado == 'completada' ? Colors.green : Colors.orange,
+  Widget _tarjetaChat({
+    required String clienteId,
+    required String nombre,
+    required String foto,
+    required String ultimoMensaje,
+    required int noLeidos,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        tileColor: AppTheme.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTheme.radiusM),
+          side: const BorderSide(color: AppTheme.divider, width: 0.5),
         ),
-      );
+        leading: CircleAvatar(
+          radius: 24,
+          backgroundColor: AppTheme.gold,
+          backgroundImage: foto.isNotEmpty ? MemoryImage(base64Decode(foto)) : null,
+          child: foto.isEmpty ? Icon(Icons.person, color: AppTheme.black) : null,
+        ),
+        title: Text(
+          nombre,
+          style: AppTheme.titleSmall.copyWith(
+            fontWeight: noLeidos > 0 ? FontWeight.w700 : FontWeight.w500,
+          ),
+        ),
+        subtitle: Text(
+          ultimoMensaje,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: AppTheme.bodySmall.copyWith(
+            color: noLeidos > 0 ? AppTheme.textSecond : AppTheme.textHint,
+          ),
+        ),
+        trailing: noLeidos > 0
+            ? Badge(
+                backgroundColor: AppTheme.gold,
+                label: Text('$noLeidos',
+                    style: TextStyle(
+                        color: AppTheme.black,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11)),
+                child: Icon(Icons.chevron_right_rounded, color: AppTheme.textHint),
+              )
+            : Icon(Icons.chevron_right_rounded, color: AppTheme.textHint),
+        onTap: () => Navigator.push(
+          context,
+          AppRoutes.slide(PantallaChat(
+            clienteId: clienteId,
+            nombreDestinatario: nombre,
+          )),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _actualizarCita(
+      String citaId, String clienteId, String nuevoEstado, String campo) async {
+    await _db
+        .collection(Colecciones.citas).doc(citaId)
+        .update({Campos.estado: nuevoEstado});
+    await _db
+        .collection(Colecciones.clientes).doc(clienteId)
+        .update({campo: FieldValue.increment(1)});
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(nuevoEstado == EstadoCita.completada
+            ? '✅ Cita completada. Punto sumado.'
+            : '⚠️ Falta registrada.'),
+        backgroundColor: nuevoEstado == EstadoCita.completada
+            ? AppTheme.success : AppTheme.warning,
+      ));
     }
   }
 
-  // Ventana de aviso antes de borrar una cita por si nos hemos equivocado de botón
   void _confirmarBorrado(String citaId) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.black,
-        title: const Text('¿Cancelar Cita?', style: TextStyle(color: Colors.white)),
-        content: const Text('Se borrará y se liberará el hueco para otro cliente.', style: TextStyle(color: Colors.white70)),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Volver')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () {
-              FirebaseFirestore.instance.collection('citas').doc(citaId).delete();
-              Navigator.pop(context);
-            },
-            child: const Text('Eliminar y Liberar'),
-          )
-        ],
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Cancelar cita?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('Se borrará y el hueco quedará libre.'),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.error,
+                foregroundColor: AppTheme.textPrimary,
+                minimumSize: const Size(double.infinity, 44),
+              ),
+              onPressed: () async {
+                await _db.collection(Colecciones.citas).doc(citaId).delete();
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: const Text('Cancelar cita'),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Volver'),
+            ),
+          ],
+        ),
       ),
     );
   }

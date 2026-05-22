@@ -55,6 +55,10 @@ lib/firebase_options.dart
 *.secret
 secrets.dart
 
+# Firebase Admin SDK — NUNCA subir esto a un repositorio.
+# Esta clave da acceso total a Firebase. Va en el servidor, no en el cliente.
+*-firebase-adminsdk-*.json
+
 # Archivos de sistema y carpetas de compilación
 build/
 .dart_tool/

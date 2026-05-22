@@ -1,6 +1,9 @@
-import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+
+import '../core/app_theme.dart';
+import '../core/constants.dart';
 
 class PantallaMisCupones extends StatefulWidget {
   const PantallaMisCupones({super.key});
@@ -10,50 +13,65 @@ class PantallaMisCupones extends StatefulWidget {
 }
 
 class _PantallaMisCuponesState extends State<PantallaMisCupones> {
-  final String _miUid = FirebaseAuth.instance.currentUser!.uid;
+  late final String _miUid;
 
-  // --- Proceso de canjeo de puntos ---
-  void _confirmarCanjeo(String tituloCupon, int puntosNecesarios) {
+  FirebaseFirestore get _db => FirebaseFirestore.instance;
+  FirebaseAuth get _auth => FirebaseAuth.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    _miUid = _auth.currentUser!.uid;
+  }
+
+  void _confirmarCanjeo(String titulo, int puntosNecesarios) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.grey[900],
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: const BorderSide(color: Colors.amber, width: 2),
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Canjear cupón?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Vas a gastar ${_textoPuntos(puntosNecesarios)} para obtener:\n\n"$titulo"\n\nEnséñale esta pantalla al barbero.',
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: () async {
+                bool canjeCorrecto;
+                try {
+                  canjeCorrecto = await _canjearCupon(titulo, puntosNecesarios);
+                } catch (e) {
+                  debugPrint('Error al canjear cupón: $e');
+                  if (!ctx.mounted || !mounted) return;
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: const Text('No se pudo canjear el cupón. Inténtalo de nuevo.'),
+                    backgroundColor: AppTheme.error,
+                    duration: const Duration(seconds: 5),
+                  ));
+                  return;
+                }
+                if (!ctx.mounted || !mounted) return;
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(canjeCorrecto
+                      ? '🎉 ¡Cupón canjeado! Enséñaselo al barbero.'
+                      : 'No tienes puntos suficientes para este cupón.'),
+                  backgroundColor: canjeCorrecto ? AppTheme.success : AppTheme.warning,
+                  duration: const Duration(seconds: 5),
+                ));
+              },
+              child: const Text('CANJEAR'),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancelar'),
+            ),
+          ],
         ),
-        title: const Text('¿Canjear Cupón?', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        content: Text(
-          'Vas a gastar $puntosNecesarios Citas V para obtener:\n\n"$tituloCupon"\n\n¿Estás seguro? Enséñale esta pantalla a tu barbero para que te aplique la recompensa.',
-          style: const TextStyle(color: Colors.white70),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-            onPressed: () async {
-              // Restamos los puntos al usuario usando FieldValue.increment con valor negativo
-              await FirebaseFirestore.instance.collection('clientes').doc(_miUid).update({
-                'citasV': FieldValue.increment(-puntosNecesarios)
-              });
-
-              if (mounted) {
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('🎉 ¡Cupón canjeado con éxito! Enséñaselo al barbero.'),
-                    backgroundColor: Colors.green,
-                    duration: Duration(seconds: 5),
-                  ),
-                );
-              }
-            },
-            child: const Text('Sí, Canjear', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-          )
-        ],
       ),
     );
   }
@@ -61,151 +79,167 @@ class _PantallaMisCuponesState extends State<PantallaMisCupones> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('MIS CUPONES', style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.black,
-      ),
-      
-      // Implementamos un StreamBuilder doble: primero leemos los puntos del cliente
+      appBar: AppBar(title: const Text('Mis cupones')),
       body: StreamBuilder<DocumentSnapshot>(
-        stream: FirebaseFirestore.instance.collection('clientes').doc(_miUid).snapshots(),
-        builder: (context, userSnapshot) {
-          if (userSnapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.amber));
+        stream: _db
+            .collection(Colecciones.clientes).doc(_miUid).snapshots(),
+        builder: (context, userSnap) {
+          if (userSnap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
           }
-
-          int misPuntos = 0;
-          if (userSnapshot.hasData && userSnapshot.data!.exists) {
-            misPuntos = (userSnapshot.data!.data() as Map<String, dynamic>)['citasV'] ?? 0;
-          }
+          final misPuntos = userSnap.hasData && userSnap.data!.exists
+              ? _leerEntero((userSnap.data!.data() as Map<String, dynamic>)[Campos.citasV])
+              : 0;
 
           return Column(
             children: [
-              // --- Cabecera: Marcador de Puntos del usuario ---
+              // ─── Cabecera de puntos ────────────────────────────────────────
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: Colors.grey[900],
-                  border: const Border(bottom: BorderSide(color: Colors.amber, width: 2)),
+                padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 24),
+                decoration: const BoxDecoration(
+                  color: AppTheme.surface,
+                  border: Border(bottom: BorderSide(color: AppTheme.divider, width: 0.5)),
                 ),
-                child: Column(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.star, color: Colors.amber, size: 40),
-                    const SizedBox(height: 10),
-                    const Text('Tus Puntos Acumulados', style: TextStyle(color: Colors.white70, fontSize: 16)),
-                    Text('$misPuntos', style: const TextStyle(color: Colors.amber, fontSize: 40, fontWeight: FontWeight.bold)),
-                    const Text('Cada cita completada suma 1 punto.', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                    Column(
+                      children: [
+                        Icon(Icons.star_rounded, color: AppTheme.gold, size: 32),
+                        const SizedBox(height: 10),
+                        Text(
+                          '$misPuntos',
+                          style: AppTheme.displayLarge.copyWith(color: AppTheme.gold),
+                        ),
+                        const SizedBox(height: 4),
+                        Text('Citas completadas', style: AppTheme.bodyMedium),
+                        const SizedBox(height: 2),
+                        Text('Cada cita suma 1 punto', style: AppTheme.bodySmall),
+                      ],
+                    ),
                   ],
                 ),
               ),
-
-              // --- Lista: Catálogo de cupones disponibles ---
+              // ─── Lista de cupones ──────────────────────────────────────────
               Expanded(
                 child: StreamBuilder<QuerySnapshot>(
-                  stream: FirebaseFirestore.instance.collection('cupones').orderBy('puntosNecesarios').snapshots(),
-                  builder: (context, cuponesSnapshot) {
-                    if (cuponesSnapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.amber));
-                    if (!cuponesSnapshot.hasData || cuponesSnapshot.data!.docs.isEmpty) return const Center(child: Text('No hay cupones disponibles ahora mismo.', style: TextStyle(color: Colors.white54)));
-
+                  stream: _db
+                      .collection(Colecciones.cupones)
+                      .orderBy(Campos.puntosNecesarios)
+                      .snapshots(),
+                  builder: (context, cuponesSnap) {
+                    if (cuponesSnap.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (!cuponesSnap.hasData || cuponesSnap.data!.docs.isEmpty) {
+                      return Center(
+                        child: Text('No hay cupones disponibles.',
+                            style: AppTheme.bodyMedium),
+                      );
+                    }
                     return ListView.builder(
-                      padding: const EdgeInsets.all(15),
-                      itemCount: cuponesSnapshot.data!.docs.length,
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+                      itemCount: cuponesSnap.data!.docs.length,
                       itemBuilder: (context, index) {
-                        var cupon = cuponesSnapshot.data!.docs[index].data() as Map<String, dynamic>;
-                        String titulo = cupon['titulo'] ?? '';
-                        String descripcion = cupon['descripcion'] ?? '';
-                        int puntosNecesarios = cupon['puntosNecesarios'] ?? 1;
+                        final cupon  = cuponesSnap.data!.docs[index].data()
+                            as Map<String, dynamic>;
+                        final titulo = cupon[Campos.titulo] as String? ?? '';
+                        final desc   = cupon[Campos.descripcion] as String? ?? '';
+                        final puntosLeidos = _leerEntero(cupon[Campos.puntosNecesarios], valorDefecto: 1);
+                        final puntos = puntosLeidos <= 0 ? 1 : puntosLeidos;
+                        final puedeC = misPuntos >= puntos;
+                        final prog   = (misPuntos / puntos).clamp(0.0, 1.0);
 
-                        // Comprobamos si el usuario tiene puntos suficientes para este cupón
-                        bool sePuedeCanjear = misPuntos >= puntosNecesarios;
-                        
-                        // Calculamos el porcentaje para la barra de progreso (máximo 100%)
-                        double progresoVisual = misPuntos / puntosNecesarios;
-                        if (progresoVisual > 1.0) progresoVisual = 1.0;
-
-                        return Card(
-                          color: Colors.grey[900],
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(15),
-                            side: BorderSide(
-                              color: sePuedeCanjear ? Colors.amber : Colors.white10, 
-                              width: sePuedeCanjear ? 2 : 1
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color:        AppTheme.surface,
+                              borderRadius: BorderRadius.circular(AppTheme.radiusL),
+                              border: Border.all(
+                                color: puedeC ? AppTheme.gold : AppTheme.divider,
+                                width: puedeC ? 1.5 : 0.5,
+                              ),
                             ),
-                          ),
-                          margin: const EdgeInsets.only(bottom: 20),
-                          child: Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // Título y Icono del premio
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.all(20),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Título + icono
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          titulo,
+                                          style: AppTheme.titleMedium.copyWith(
+                                            color: puedeC ? AppTheme.gold : AppTheme.textPrimary,
+                                          ),
+                                        ),
+                                      ),
+                                      Icon(
+                                        Icons.card_giftcard_outlined,
+                                        color: puedeC ? AppTheme.gold : AppTheme.textHint,
+                                        size: 22,
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(desc, style: AppTheme.bodyMedium),
+                                  const SizedBox(height: 20),
+                                  // Progreso
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text('Progreso', style: AppTheme.bodySmall),
+                                      Text(
+                                        '$misPuntos / $puntos',
+                                        style: AppTheme.labelGold.copyWith(
+                                          color: puedeC ? AppTheme.gold : AppTheme.textSecond,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+                                    child: LinearProgressIndicator(
+                                      value:      prog,
+                                      minHeight:  6,
+                                      backgroundColor: AppTheme.surfaceHigh,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                          puedeC ? AppTheme.gold : AppTheme.textHint),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 20),
+                                  // Botón de canjeo
+                                  SizedBox(
+                                    width: double.infinity, height: 46,
+                                    child: ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: puedeC
+                                            ? AppTheme.gold
+                                            : AppTheme.surfaceHigh,
+                                        foregroundColor: puedeC
+                                            ? AppTheme.black
+                                            : AppTheme.textHint,
+                                        minimumSize: const Size(double.infinity, 46),
+                                      ),
+                                      onPressed: puedeC
+                                          ? () => _confirmarCanjeo(titulo, puntos)
+                                          : null,
                                       child: Text(
-                                        titulo, 
-                                        style: TextStyle(
-                                          color: sePuedeCanjear ? Colors.amber : Colors.white, 
-                                          fontSize: 20, 
-                                          fontWeight: FontWeight.bold
-                                        )
+                                        puedeC ? 'CANJEAR CUPÓN' : 'FALTAN PUNTOS',
+                                        style: AppTheme.buttonLabel.copyWith(
+                                          color: puedeC ? AppTheme.black : AppTheme.textHint,
+                                          fontSize: 13,
+                                        ),
                                       ),
                                     ),
-                                    Icon(Icons.card_giftcard, color: sePuedeCanjear ? Colors.amber : Colors.white24),
-                                  ],
-                                ),
-                                const SizedBox(height: 5),
-                                Text(descripcion, style: const TextStyle(color: Colors.white70, fontSize: 14)),
-                                const SizedBox(height: 20),
-
-                                // Contador de progreso de puntos
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text('Progreso', style: TextStyle(color: Colors.white54, fontSize: 13)),
-                                    Text(
-                                      '$misPuntos / $puntosNecesarios Citas', 
-                                      style: TextStyle(
-                                        color: sePuedeCanjear ? Colors.amber : Colors.white, 
-                                        fontWeight: FontWeight.bold
-                                      )
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-
-                                // Barra de progreso gráfica
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(10),
-                                  child: LinearProgressIndicator(
-                                    value: progresoVisual,
-                                    minHeight: 10,
-                                    backgroundColor: Colors.black,
-                                    valueColor: AlwaysStoppedAnimation<Color>(sePuedeCanjear ? Colors.amber : Colors.white54),
                                   ),
-                                ),
-                                const SizedBox(height: 20),
-
-                                // Botón interactivo: Se activa solo si hay puntos suficientes
-                                SizedBox(
-                                  width: double.infinity,
-                                  height: 45,
-                                  child: ElevatedButton(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: sePuedeCanjear ? Colors.amber : Colors.grey[800],
-                                      foregroundColor: sePuedeCanjear ? Colors.black : Colors.white54,
-                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                    ),
-                                    onPressed: sePuedeCanjear ? () => _confirmarCanjeo(titulo, puntosNecesarios) : null,
-                                    child: Text(
-                                      sePuedeCanjear ? 'CANJEAR CUPÓN' : 'FALTAN PUNTOS', 
-                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)
-                                    ),
-                                  ),
-                                )
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         );
@@ -219,5 +253,42 @@ class _PantallaMisCuponesState extends State<PantallaMisCupones> {
         },
       ),
     );
+  }
+
+  int _leerEntero(dynamic valor, {int valorDefecto = 0}) {
+    if (valor is int) return valor;
+    if (valor is num) return valor.toInt();
+    if (valor is String) return int.tryParse(valor) ?? valorDefecto;
+    return valorDefecto;
+  }
+
+  String _textoPuntos(int puntos) {
+    return '$puntos Cita${puntos > 1 ? 's' : ''} V';
+  }
+
+  Future<bool> _canjearCupon(String titulo, int puntosNecesarios) async {
+    final clienteRef = _db.collection(Colecciones.clientes).doc(_miUid);
+    final canjeRef = _db.collection(Colecciones.canjesCupones).doc();
+
+    return _db.runTransaction((transaction) async {
+      final clienteDoc = await transaction.get(clienteRef);
+      final datosCliente = clienteDoc.data();
+      final puntosActuales = _leerEntero(datosCliente?[Campos.citasV]);
+
+      if (puntosActuales < puntosNecesarios) return false;
+
+      transaction.update(clienteRef, {
+        Campos.citasV: FieldValue.increment(-puntosNecesarios),
+      });
+      transaction.set(canjeRef, {
+        Campos.clienteId: _miUid,
+        Campos.nombreCliente: datosCliente?[Campos.nombre] ?? 'Cliente',
+        Campos.cuponTitulo: titulo,
+        Campos.puntosGastados: puntosNecesarios,
+        Campos.fechaCanje: FieldValue.serverTimestamp(),
+      });
+
+      return true;
+    });
   }
 }

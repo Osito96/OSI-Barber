@@ -1,107 +1,146 @@
-import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+
+import '../core/app_theme.dart';
+import '../core/constants.dart';
+import '../utils/ui_utils.dart';
 
 class PantallaMisCitas extends StatelessWidget {
   const PantallaMisCitas({super.key});
 
-  // --- Lógica de cancelación (Tu Regla de Oro) ---
-  // Esta función es vital: evita que el cliente cancele si la cita es hoy, 
-  // protegiendo así el horario del barbero.
-  bool _puedeCancelar(DateTime fechaCita) {
-    DateTime ahora = DateTime.now();
-    // Normalizamos a las 00:00 para comparar solo el día calendario
-    DateTime hoy = DateTime(ahora.year, ahora.month, ahora.day);
-    DateTime diaCita = DateTime(fechaCita.year, fechaCita.month, fechaCita.day);
+  FirebaseFirestore get _db => FirebaseFirestore.instance;
+  FirebaseAuth get _auth => FirebaseAuth.instance;
 
-    // Solo devolvemos 'true' si el día de la cita es estrictamente posterior a hoy
-    return diaCita.isAfter(hoy);
+  bool _puedeCancelar(DateTime fechaCita) {
+    final hoy     = DateTime.now();
+    final diaCita = DateTime(fechaCita.year,  fechaCita.month,  fechaCita.day);
+    final diaHoy  = DateTime(hoy.year,        hoy.month,        hoy.day);
+    return diaCita.isAfter(diaHoy);
   }
 
   @override
   Widget build(BuildContext context) {
-    // Identificamos al usuario para traer solo su agenda personal
-    final String uid = FirebaseAuth.instance.currentUser!.uid;
+    final uid = _auth.currentUser!.uid;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('MIS CITAS', style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.black,
-      ),
+      appBar: AppBar(title: const Text('Mis citas')),
       body: StreamBuilder<QuerySnapshot>(
-        // Escuchamos en tiempo real solo las citas pendientes de este cliente concreto
-        stream: FirebaseFirestore.instance
-            .collection('citas')
-            .where('clienteId', isEqualTo: uid)
-            .where('estado', isEqualTo: 'pendiente')
+        stream: _db
+            .collection(Colecciones.citas)
+            .where(Campos.clienteId, isEqualTo: uid)
+            .where(Campos.estado,    isEqualTo: EstadoCita.pendiente)
+            .orderBy(Campos.fecha)
             .snapshots(),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-          
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
           if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-            return const Center(child: Text('No tienes citas pendientes.', style: TextStyle(color: Colors.white54)));
+            return Center(
+              child: Text('No tienes citas pendientes.', style: AppTheme.bodyMedium),
+            );
           }
 
-          var citas = snapshot.data!.docs;
-
           return ListView.builder(
-            padding: const EdgeInsets.all(20),
-            itemCount: citas.length,
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+            itemCount: snapshot.data!.docs.length,
             itemBuilder: (context, index) {
-              var citaDoc = citas[index];
-              var datos = citaDoc.data() as Map<String, dynamic>;
-              
-              DateTime fechaCita = (datos['fecha'] as Timestamp).toDate();
-              String servicio = datos['servicio'] ?? 'Servicio';
-              String hora = datos['hora'] ?? '--:--';
-              
-              // Comprobamos si, por fecha, el usuario aún tiene derecho a cancelar
-              bool permiteCancelar = _puedeCancelar(fechaCita);
+              final citaDoc   = snapshot.data!.docs[index];
+              final datos     = citaDoc.data() as Map<String, dynamic>;
+              final fechaCita = (datos[Campos.fecha] as Timestamp).toDate();
+              final servicio  = datos[Campos.servicio] as String? ?? 'Servicio';
+              final hora      = datos[Campos.hora]     as String? ?? '--:--';
+              final puedeCanc = _puedeCancelar(fechaCita);
 
-              return Card(
-                color: Colors.grey[900],
-                margin: const EdgeInsets.only(bottom: 15),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  // Si se puede cancelar, resaltamos un poco el borde en dorado
-                  side: BorderSide(color: permiteCancelar ? Colors.amber.withOpacity(0.3) : Colors.white10),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(15),
-                  child: Row(
-                    children: [
-                      // Fecha y Hora de la reserva
-                      Column(
-                        children: [
-                          Text('${fechaCita.day}/${fechaCita.month}', style: const TextStyle(color: Colors.amber, fontSize: 18, fontWeight: FontWeight.bold)),
-                          Text(hora, style: const TextStyle(color: Colors.white, fontSize: 16)),
-                        ],
-                      ),
-                      const SizedBox(width: 20),
-                      
-                      // Información del servicio contratado
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(servicio, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                            const Text('Estado: Pendiente', style: TextStyle(color: Colors.white54, fontSize: 12)),
-                          ],
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color:        AppTheme.surface,
+                    borderRadius: BorderRadius.circular(AppTheme.radiusL),
+                    border: Border.all(
+                      color: puedeCanc ? AppTheme.goldSoft : AppTheme.divider,
+                      width: puedeCanc ? 1 : 0.5,
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(18),
+                    child: Row(
+                      children: [
+                        // Badge de fecha
+                        Container(
+                          width: 54, height: 60,
+                          decoration: BoxDecoration(
+                            color:        AppTheme.goldSoft,
+                            borderRadius: BorderRadius.circular(AppTheme.radiusM),
+                            border: Border.all(
+                              color: AppTheme.gold.withValues(alpha: 0.3),
+                            ),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Text(
+                                '${fechaCita.day}',
+                                style: AppTheme.titleLarge.copyWith(
+                                    color: AppTheme.gold, height: 1),
+                              ),
+                              Text(
+                                UiUtils.mesCorto(fechaCita.month).toUpperCase(),
+                                style: AppTheme.bodySmall.copyWith(
+                                    color: AppTheme.gold, letterSpacing: 0.5),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      
-                      // Botón de acción: Cancelar o Candado informativo
-                      if (permiteCancelar)
-                        IconButton(
-                          icon: const Icon(Icons.delete_forever, color: Colors.redAccent),
-                          onPressed: () => _confirmarCancelacion(context, citaDoc.id),
-                        )
-                      else
-                        const Tooltip(
-                          message: 'No se puede cancelar el mismo día',
-                          child: Icon(Icons.lock_clock, color: Colors.white24),
+                        const SizedBox(width: 16),
+                        // Info del servicio
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(servicio, style: AppTheme.titleSmall),
+                              const SizedBox(height: 4),
+                              Row(children: [
+                                Icon(Icons.access_time_outlined,
+                                    size: 13, color: AppTheme.textHint),
+                                const SizedBox(width: 4),
+                                Text(hora, style: AppTheme.bodyMedium),
+                              ]),
+                              const SizedBox(height: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color:        AppTheme.surfaceHigh,
+                                  borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+                                ),
+                                child: Text('Pendiente',
+                                    style: AppTheme.bodySmall.copyWith(
+                                        color: AppTheme.textSecond)),
+                              ),
+                            ],
+                          ),
                         ),
-                    ],
+                        // Acción
+                        if (puedeCanc)
+                          IconButton(
+                            icon: Icon(Icons.close_rounded,
+                                color: AppTheme.error, size: 20),
+                            onPressed: () => _confirmarCancelacion(context, citaDoc.id),
+                          )
+                        else
+                          Tooltip(
+                            message: 'No se puede cancelar el mismo día',
+                            child: IconButton(
+                              icon: Icon(Icons.lock_outline_rounded,
+                                  color: AppTheme.gold, size: 20),
+                              onPressed: () => _mostrarAvisoNoCancelable(context),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               );
@@ -112,24 +151,60 @@ class PantallaMisCitas extends StatelessWidget {
     );
   }
 
-  // --- Ventana de confirmación para borrar la cita ---
   void _confirmarCancelacion(BuildContext context, String citaId) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.black,
-        title: const Text('¿Cancelar cita?', style: TextStyle(color: Colors.white)),
-        content: const Text('Esta acción no se puede deshacer y el hueco quedará libre.', style: TextStyle(color: Colors.white70)),
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Cancelar cita?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Esta acción no se puede deshacer y el hueco quedará libre.',
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.error,
+                foregroundColor: AppTheme.textPrimary,
+                minimumSize: const Size(double.infinity, 44),
+              ),
+              onPressed: () async {
+                await _db.collection(Colecciones.citas).doc(citaId).delete();
+                if (ctx.mounted) Navigator.pop(ctx);
+              },
+              child: const Text('Sí, cancelar'),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('No, mantener'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _mostrarAvisoNoCancelable(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.lock_outline_rounded, color: AppTheme.gold),
+            const SizedBox(width: 10),
+            const Text('Cancelación bloqueada'),
+          ],
+        ),
+        content: const Text(
+          'No se pueden cancelar citas el mismo día. Si necesitas ayuda, contacta con la barbería.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('No', style: TextStyle(color: Colors.grey))),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () async {
-              // Borramos el documento directamente de la colección de citas
-              await FirebaseFirestore.instance.collection('citas').doc(citaId).delete();
-              if (context.mounted) Navigator.pop(context);
-            },
-            child: const Text('Sí, cancelar', style: TextStyle(color: Colors.white)),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Entendido'),
           ),
         ],
       ),

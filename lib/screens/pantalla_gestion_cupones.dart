@@ -1,5 +1,8 @@
-import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+
+import '../core/app_theme.dart';
+import '../core/constants.dart';
 
 class PantallaGestionCupones extends StatefulWidget {
   const PantallaGestionCupones({super.key});
@@ -9,103 +12,97 @@ class PantallaGestionCupones extends StatefulWidget {
 }
 
 class _PantallaGestionCuponesState extends State<PantallaGestionCupones> {
-  
-  // --- Ventana para CREAR o EDITAR cupones ---
-  // Si le pasamos un documento, la ventana se rellena para editar. Si no, está vacía para crear.
+  FirebaseFirestore get _db => FirebaseFirestore.instance;
+
   void _mostrarDialogoCupon({DocumentSnapshot? documentoActual}) {
-    bool esEdicion = documentoActual != null;
-    
-    // Inicializamos los controladores con los datos existentes si estamos editando
-    final _tituloCtrl = TextEditingController(text: esEdicion ? documentoActual['titulo'] : '');
-    final _descCtrl = TextEditingController(text: esEdicion ? documentoActual['descripcion'] : '');
-    final _puntosCtrl = TextEditingController(text: esEdicion ? documentoActual['puntosNecesarios'].toString() : '');
+    final esEdicion  = documentoActual != null;
+    final datosActuales = documentoActual?.data() as Map<String, dynamic>?;
+    final tituloCtrl = TextEditingController(text: datosActuales?[Campos.titulo] ?? '');
+    final descCtrl   = TextEditingController(text: datosActuales?[Campos.descripcion] ?? '');
+    final puntosCtrl = TextEditingController(
+        text: esEdicion ? (datosActuales?[Campos.puntosNecesarios] ?? '').toString() : '');
 
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: Colors.grey[900],
-          title: Text(
-            esEdicion ? 'Editar Cupón' : 'Nuevo Cupón', 
-            style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)
+      builder: (ctx) => AlertDialog(
+        title: Text(esEdicion ? 'Editar cupón' : 'Nuevo cupón'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _inputDialog(tituloCtrl, 'Título (ej: Corte gratis)', Icons.card_giftcard_outlined),
+              const SizedBox(height: 12),
+              _inputDialog(descCtrl, 'Descripción corta', Icons.description_outlined),
+              const SizedBox(height: 12),
+              _inputDialog(puntosCtrl, 'Citas V necesarias', Icons.star_outline_rounded,
+                  tipo: TextInputType.number),
+            ],
           ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: _tituloCtrl, 
-                  style: const TextStyle(color: Colors.white), 
-                  decoration: const InputDecoration(labelText: 'Título (Ej: Corte Gratis)', labelStyle: TextStyle(color: Colors.white54))
-                ),
-                TextField(
-                  controller: _descCtrl, 
-                  style: const TextStyle(color: Colors.white), 
-                  decoration: const InputDecoration(labelText: 'Descripción corta', labelStyle: TextStyle(color: Colors.white54))
-                ),
-                TextField(
-                  controller: _puntosCtrl, 
-                  style: const TextStyle(color: Colors.white), 
-                  keyboardType: TextInputType.number, 
-                  decoration: const InputDecoration(labelText: 'Citas V necesarias (Ej: 10)', labelStyle: TextStyle(color: Colors.white54))
-                ),
-              ],
-            ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-              onPressed: () async {
-                // Validación básica de seguridad
-                if (_tituloCtrl.text.isEmpty || _puntosCtrl.text.isEmpty) return;
-
-                int puntos = int.tryParse(_puntosCtrl.text) ?? 0;
-
-                Map<String, dynamic> datosCupon = {
-                  'titulo': _tituloCtrl.text.trim(),
-                  'descripcion': _descCtrl.text.trim(),
-                  'puntosNecesarios': puntos,
-                };
-
-                // Decidimos si añadir un documento nuevo o actualizar el que ya tenemos
-                if (esEdicion) {
-                  await FirebaseFirestore.instance.collection('cupones').doc(documentoActual.id).update(datosCupon);
-                } else {
-                  await FirebaseFirestore.instance.collection('cupones').add(datosCupon);
-                }
-
-                if (mounted) Navigator.pop(context);
-              },
-              child: Text(esEdicion ? 'Guardar' : 'Crear', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-            ),
-          ],
-        );
-      },
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(minimumSize: const Size(100, 44)),
+            onPressed: () async {
+              if (tituloCtrl.text.isEmpty || puntosCtrl.text.isEmpty) return;
+              final datos = {
+                Campos.titulo:           tituloCtrl.text.trim(),
+                Campos.descripcion:      descCtrl.text.trim(),
+                Campos.puntosNecesarios: int.tryParse(puntosCtrl.text) ?? 0,
+              };
+              if (esEdicion) {
+                await _db
+                    .collection(Colecciones.cupones).doc(documentoActual!.id).update(datos);
+              } else {
+                await _db
+                    .collection(Colecciones.cupones).add(datos);
+              }
+              if (mounted) Navigator.pop(ctx);
+            },
+            child: Text(esEdicion ? 'GUARDAR' : 'CREAR'),
+          ),
+        ],
+      ),
     );
   }
 
-  // --- Confirmación de borrado ---
-  void _confirmarBorrado(String idCupon) {
+  Widget _inputDialog(TextEditingController ctrl, String label, IconData icono,
+      {TextInputType tipo = TextInputType.text}) {
+    return TextField(
+      controller:   ctrl,
+      keyboardType: tipo,
+      style: TextStyle(color: AppTheme.textPrimary),
+      decoration: InputDecoration(
+        labelText:  label,
+        prefixIcon: Icon(icono),
+      ),
+    );
+  }
+
+  void _confirmarBorrado(String id) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.black,
-        title: const Text('¿Borrar cupón?', style: TextStyle(color: Colors.white)),
-        content: const Text('Este premio ya no estará disponible para los clientes.', style: TextStyle(color: Colors.white70)),
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Borrar cupón?'),
+        content: const Text('Este premio ya no estará disponible para los clientes.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () {
-              FirebaseFirestore.instance.collection('cupones').doc(idCupon).delete();
-              Navigator.pop(context);
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.error,
+              foregroundColor: AppTheme.textPrimary,
+              minimumSize: const Size(100, 44),
+            ),
+            onPressed: () async {
+              await _db
+                  .collection(Colecciones.cupones).doc(id).delete();
+              if (ctx.mounted) Navigator.pop(ctx);
             },
             child: const Text('Borrar'),
-          )
+          ),
         ],
       ),
     );
@@ -114,56 +111,77 @@ class _PantallaGestionCuponesState extends State<PantallaGestionCupones> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('GESTIÓN DE CUPONES', style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.black,
-      ),
-      // Botón flotante para añadir premios nuevos rápidamente
+      appBar: AppBar(title: const Text('Gestión de cupones')),
       floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: Colors.amber,
-        icon: const Icon(Icons.star, color: Colors.black),
-        label: const Text('Nuevo Cupón', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-        onPressed: () => _mostrarDialogoCupon(), 
+        backgroundColor: AppTheme.gold,
+        foregroundColor: AppTheme.black,
+        icon:  const Icon(Icons.star_rounded),
+        label: const Text('Nuevo cupón',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        onPressed: () => _mostrarDialogoCupon(),
       ),
       body: StreamBuilder<QuerySnapshot>(
-        // Obtenemos los cupones en tiempo real y los ordenamos por dificultad (puntos necesarios)
-        stream: FirebaseFirestore.instance.collection('cupones').orderBy('puntosNecesarios').snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator(color: Colors.amber));
-          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) return const Center(child: Text('No hay cupones creados.', style: TextStyle(color: Colors.white54)));
-
+        stream: _db
+            .collection(Colecciones.cupones)
+            .orderBy(Campos.puntosNecesarios)
+            .snapshots(),
+        builder: (ctx, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (!snap.hasData || snap.data!.docs.isEmpty) {
+            return Center(
+              child: Text('No hay cupones creados.', style: AppTheme.bodyMedium),
+            );
+          }
           return ListView.builder(
-            padding: const EdgeInsets.all(10),
-            itemCount: snapshot.data!.docs.length,
-            itemBuilder: (context, index) {
-              var documento = snapshot.data!.docs[index];
-              var cupon = documento.data() as Map<String, dynamic>;
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+            itemCount: snap.data!.docs.length,
+            itemBuilder: (ctx, i) {
+              final doc   = snap.data!.docs[i];
+              final cupon = doc.data() as Map<String, dynamic>;
 
-              return Card(
-                color: Colors.grey[900],
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  side: const BorderSide(color: Colors.amber, width: 1), // Efecto visual de ticket VIP
-                ),
-                margin: const EdgeInsets.only(bottom: 15),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.all(15),
-                  leading: const CircleAvatar(
-                    backgroundColor: Colors.amber,
-                    child: Icon(Icons.card_giftcard, color: Colors.black),
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color:        AppTheme.surface,
+                    borderRadius: BorderRadius.circular(AppTheme.radiusL),
+                    border:       Border.all(color: AppTheme.goldSoft, width: 1),
                   ),
-                  title: Text(cupon['titulo'] ?? '', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                  subtitle: Text('${cupon['descripcion']}\nCuesta: ${cupon['puntosNecesarios']} Citas V', style: const TextStyle(color: Colors.white70)),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
+                  child: Row(
                     children: [
-                      IconButton(
-                        icon: const Icon(Icons.edit, color: Colors.blueAccent),
-                        onPressed: () => _mostrarDialogoCupon(documentoActual: documento),
+                      Container(
+                        width: 40, height: 40,
+                        decoration: const BoxDecoration(
+                            color: AppTheme.goldSoft, shape: BoxShape.circle),
+                        child: Icon(Icons.card_giftcard_outlined,
+                            color: AppTheme.gold, size: 20),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(cupon[Campos.titulo] ?? '', style: AppTheme.titleSmall),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${cupon[Campos.descripcion]}  ·  ${cupon[Campos.puntosNecesarios]} Citas V',
+                              style: AppTheme.bodySmall,
+                            ),
+                          ],
+                        ),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.delete, color: Colors.redAccent),
-                        onPressed: () => _confirmarBorrado(documento.id),
+                        icon: Icon(Icons.edit_outlined,
+                            color: AppTheme.textSecond, size: 20),
+                        onPressed: () => _mostrarDialogoCupon(documentoActual: doc),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.delete_outline_rounded,
+                            color: AppTheme.error, size: 20),
+                        onPressed: () => _confirmarBorrado(doc.id),
                       ),
                     ],
                   ),

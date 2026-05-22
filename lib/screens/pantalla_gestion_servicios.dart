@@ -1,5 +1,8 @@
-import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+
+import '../core/app_theme.dart';
+import '../core/constants.dart';
 
 class PantallaGestionServicios extends StatefulWidget {
   const PantallaGestionServicios({super.key});
@@ -9,122 +12,106 @@ class PantallaGestionServicios extends StatefulWidget {
 }
 
 class _PantallaGestionServiciosState extends State<PantallaGestionServicios> {
-  
-  // --- Ventana interactiva para añadir o modificar servicios ---
-  // He unificado ambas funciones en este diálogo: si recibe un "documentoActual", se pone en modo edición.
+  FirebaseFirestore get _db => FirebaseFirestore.instance;
+
   void _mostrarDialogoServicio({DocumentSnapshot? documentoActual}) {
-    bool esEdicion = documentoActual != null;
-    
-    // Si estamos editando, cargamos los valores que ya existen en la base de datos.
-    // Si el servicio es nuevo, los controladores se inician vacíos o con valores por defecto.
-    final _nombreCtrl = TextEditingController(text: esEdicion ? documentoActual['nombre'] : '');
-    final _precioCtrl = TextEditingController(text: esEdicion ? documentoActual['precio'].toString() : '');
-    final _duracionCtrl = TextEditingController(text: esEdicion ? documentoActual['duracion'].toString() : '');
-    final _ordenCtrl = TextEditingController(text: esEdicion ? (documentoActual.data() as Map<String, dynamic>)['orden']?.toString() ?? '0' : '0');
+    final esEdicion  = documentoActual != null;
+    final datosActuales = documentoActual?.data() as Map<String, dynamic>?;
+    final nombreCtrl = TextEditingController(text: datosActuales?[Campos.nombre] ?? '');
+    final precioCtrl = TextEditingController(text: (datosActuales?[Campos.precio] ?? '').toString());
+    final durCtrl    = TextEditingController(text: (datosActuales?[Campos.duracion] ?? '').toString());
+    final ordenCtrl  = TextEditingController(
+      text: esEdicion ? (datosActuales?[Campos.orden] ?? 0).toString() : '0',
+    );
 
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: Colors.grey[900],
-          title: Text(
-            esEdicion ? 'Editar Servicio' : 'Nuevo Servicio', 
-            style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)
+      builder: (ctx) => AlertDialog(
+        title: Text(esEdicion ? 'Editar servicio' : 'Nuevo servicio'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _inputDialog(nombreCtrl, 'Nombre del servicio', Icons.content_cut_outlined),
+              const SizedBox(height: 12),
+              _inputDialog(precioCtrl, 'Precio (€)', Icons.euro_outlined,
+                  tipo: TextInputType.number),
+              const SizedBox(height: 12),
+              _inputDialog(durCtrl, 'Duración (minutos)', Icons.schedule_outlined,
+                  tipo: TextInputType.number),
+              const SizedBox(height: 12),
+              _inputDialog(ordenCtrl, 'Orden en lista (1, 2, 3…)', Icons.sort_rounded,
+                  tipo: TextInputType.number),
+            ],
           ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: _nombreCtrl, 
-                  style: const TextStyle(color: Colors.white), 
-                  decoration: const InputDecoration(labelText: 'Nombre (Ej: Corte + Barba)', labelStyle: TextStyle(color: Colors.white54))
-                ),
-                TextField(
-                  controller: _precioCtrl, 
-                  style: const TextStyle(color: Colors.white), 
-                  keyboardType: TextInputType.number, 
-                  decoration: const InputDecoration(labelText: 'Precio (€)', labelStyle: TextStyle(color: Colors.white54))
-                ),
-                TextField(
-                  controller: _duracionCtrl, 
-                  style: const TextStyle(color: Colors.white), 
-                  keyboardType: TextInputType.number, 
-                  decoration: const InputDecoration(labelText: 'Duración (minutos)', labelStyle: TextStyle(color: Colors.white54))
-                ),
-                TextField(
-                  controller: _ordenCtrl, 
-                  style: const TextStyle(color: Colors.white), 
-                  keyboardType: TextInputType.number, 
-                  decoration: const InputDecoration(labelText: 'Orden en la lista (1, 2, 3...)', labelStyle: TextStyle(color: Colors.white54))
-                ),
-              ],
-            ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancelar', style: TextStyle(color: Colors.white54)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-              onPressed: () async {
-                // Validación rápida para no guardar datos vacíos que rompan la interfaz
-                if (_nombreCtrl.text.isEmpty || _precioCtrl.text.isEmpty || _duracionCtrl.text.isEmpty) return;
-
-                // Transformamos los textos de los inputs a números para que Firebase los guarde correctamente
-                int precio = int.tryParse(_precioCtrl.text) ?? 0;
-                int duracion = int.tryParse(_duracionCtrl.text) ?? 0;
-                int orden = int.tryParse(_ordenCtrl.text) ?? 0;
-
-                Map<String, dynamic> datosServicio = {
-                  'nombre': _nombreCtrl.text.trim(),
-                  'precio': precio,
-                  'duracion': duracion,
-                  'orden': orden,
-                };
-
-                // Dependiendo de si es edición o creación, usamos 'update' o 'add'
-                if (esEdicion) {
-                  await FirebaseFirestore.instance.collection('servicios').doc(documentoActual.id).update(datosServicio);
-                } else {
-                  await FirebaseFirestore.instance.collection('servicios').add(datosServicio);
-                }
-
-                if (mounted) Navigator.pop(context);
-              },
-              child: Text(
-                esEdicion ? 'Guardar Cambios' : 'Crear', 
-                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)
-              ),
-            ),
-          ],
-        );
-      },
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(minimumSize: const Size(100, 44)),
+            onPressed: () async {
+              if (nombreCtrl.text.isEmpty || precioCtrl.text.isEmpty ||
+                  durCtrl.text.isEmpty) return;
+              final datos = {
+                Campos.nombre:   nombreCtrl.text.trim(),
+                Campos.precio:   int.tryParse(precioCtrl.text) ?? 0,
+                Campos.duracion: int.tryParse(durCtrl.text)    ?? 0,
+                Campos.orden:    int.tryParse(ordenCtrl.text)  ?? 0,
+              };
+              if (esEdicion) {
+                await _db
+                    .collection(Colecciones.servicios).doc(documentoActual!.id).update(datos);
+              } else {
+                await _db
+                    .collection(Colecciones.servicios).add(datos);
+              }
+              if (mounted) Navigator.pop(ctx);
+            },
+            child: Text(esEdicion ? 'GUARDAR' : 'CREAR'),
+          ),
+        ],
+      ),
     );
   }
 
-  // --- Confirmación de seguridad antes de borrar ---
-  void _confirmarBorrado(String idServicio) {
+  Widget _inputDialog(TextEditingController ctrl, String label, IconData icono,
+      {TextInputType tipo = TextInputType.text}) {
+    return TextField(
+      controller:  ctrl,
+      keyboardType: tipo,
+      style: TextStyle(color: AppTheme.textPrimary),
+      decoration: InputDecoration(
+        labelText:  label,
+        prefixIcon: Icon(icono),
+      ),
+    );
+  }
+
+  void _confirmarBorrado(String id) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.black,
-        title: const Text('¿Borrar servicio?', style: TextStyle(color: Colors.white)),
+      builder: (ctx) => AlertDialog(
+        title: const Text('¿Borrar servicio?'),
         content: const Text(
-          'Este servicio desaparecerá de la app y los clientes no podrán reservarlo más.', 
-          style: TextStyle(color: Colors.white70)
-        ),
+            'Este servicio desaparecerá de la app y no podrá reservarse.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () {
-              FirebaseFirestore.instance.collection('servicios').doc(idServicio).delete();
-              Navigator.pop(context);
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.error,
+              foregroundColor: AppTheme.textPrimary,
+              minimumSize: const Size(100, 44),
+            ),
+            onPressed: () async {
+              await _db
+                  .collection(Colecciones.servicios).doc(id).delete();
+              if (ctx.mounted) Navigator.pop(ctx);
             },
             child: const Text('Borrar'),
-          )
+          ),
         ],
       ),
     );
@@ -133,64 +120,70 @@ class _PantallaGestionServiciosState extends State<PantallaGestionServicios> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('GESTIÓN DE SERVICIOS', style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.black,
-      ),
-      
-      // Botón para añadir un servicio nuevo rápidamente
+      appBar: AppBar(title: const Text('Gestión de servicios')),
       floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: Colors.amber,
-        icon: const Icon(Icons.add, color: Colors.black),
-        label: const Text('Nuevo Servicio', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-        onPressed: () => _mostrarDialogoServicio(), 
+        backgroundColor: AppTheme.gold,
+        foregroundColor: AppTheme.black,
+        icon:  const Icon(Icons.add_rounded),
+        label: const Text('Nuevo servicio',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        onPressed: () => _mostrarDialogoServicio(),
       ),
-      
       body: StreamBuilder<QuerySnapshot>(
-        // Escuchamos la colección de servicios en tiempo real y la ordenamos según el campo 'orden'
-        stream: FirebaseFirestore.instance.collection('servicios').orderBy('orden').snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.amber));
+        stream: _db
+            .collection(Colecciones.servicios).orderBy(Campos.orden).snapshots(),
+        builder: (ctx, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
           }
-          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-            return const Center(
-              child: Text('No hay servicios. ¡Añade el primero!', style: TextStyle(color: Colors.white54))
+          if (!snap.hasData || snap.data!.docs.isEmpty) {
+            return Center(
+              child: Text('No hay servicios. ¡Añade el primero!',
+                  style: AppTheme.bodyMedium),
             );
           }
-
           return ListView.builder(
-            padding: const EdgeInsets.all(10),
-            itemCount: snapshot.data!.docs.length,
-            itemBuilder: (context, index) {
-              var documento = snapshot.data!.docs[index];
-              var servicio = documento.data() as Map<String, dynamic>;
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+            itemCount: snap.data!.docs.length,
+            itemBuilder: (ctx, i) {
+              final doc      = snap.data!.docs[i];
+              final servicio = doc.data() as Map<String, dynamic>;
 
-              return Card(
-                color: Colors.grey[900],
-                margin: const EdgeInsets.only(bottom: 15),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.all(15),
-                  title: Text(
-                    servicio['nombre'] ?? '', 
-                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color:        AppTheme.surface,
+                    borderRadius: BorderRadius.circular(AppTheme.radiusL),
+                    border:       Border.all(color: AppTheme.divider, width: 0.5),
                   ),
-                  subtitle: Text(
-                    '${servicio['duracion']} min  •  ${servicio['precio']}€\nOrden en lista: ${servicio['orden'] ?? 0}', 
-                    style: const TextStyle(color: Colors.white70)
-                  ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
+                  child: Row(
                     children: [
-                      // Acceso rápido para editar los detalles del servicio
-                      IconButton(
-                        icon: const Icon(Icons.edit, color: Colors.blueAccent),
-                        onPressed: () => _mostrarDialogoServicio(documentoActual: documento),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(servicio[Campos.nombre] ?? '',
+                                style: AppTheme.titleSmall),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${servicio[Campos.duracion]} min  ·  ${servicio[Campos.precio]}€  ·  Orden: ${servicio[Campos.orden] ?? 0}',
+                              style: AppTheme.bodySmall,
+                            ),
+                          ],
+                        ),
                       ),
-                      // Acceso rápido para eliminar el servicio de la oferta
                       IconButton(
-                        icon: const Icon(Icons.delete, color: Colors.redAccent),
-                        onPressed: () => _confirmarBorrado(documento.id),
+                        icon: Icon(Icons.edit_outlined,
+                            color: AppTheme.textSecond, size: 20),
+                        onPressed: () =>
+                            _mostrarDialogoServicio(documentoActual: doc),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.delete_outline_rounded,
+                            color: AppTheme.error, size: 20),
+                        onPressed: () => _confirmarBorrado(doc.id),
                       ),
                     ],
                   ),

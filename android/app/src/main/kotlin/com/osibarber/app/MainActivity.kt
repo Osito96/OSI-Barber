@@ -1,4 +1,4 @@
-package com.example.peluqueria_app
+package com.osibarber.app
 
 import io.flutter.embedding.android.FlutterActivity
 

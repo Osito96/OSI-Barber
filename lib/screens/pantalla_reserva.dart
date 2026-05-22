@@ -1,11 +1,14 @@
+import '../core/constants.dart';
+import '../core/app_theme.dart';
+import '../utils/ui_utils.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class PantallaReserva extends StatefulWidget {
   final String nombreServicio;
-  final int precio;
-  final int duracion;
+  final int    precio;
+  final int    duracion;
   final String nombreCliente;
 
   const PantallaReserva({
@@ -21,294 +24,286 @@ class PantallaReserva extends StatefulWidget {
 }
 
 class _PantallaReservaState extends State<PantallaReserva> {
-  // --- Variables de control ---
   DateTime? _fechaSeleccionada;
-  String? _horaSeleccionada;
-  bool _estaGuardando = false;
-  List<String> _horasOcupadas = [];
-  
-  // Variable crítica: Controla si el administrador ha marcado el día como no laborable
-  bool _diaBloqueadoPorAdmin = false; 
+  String?   _horaSeleccionada;
+  bool      _estaGuardando        = false;
+  bool      _diaBloqueadoPorAdmin = false;
+  List<String> _horasOcupadas     = [];
 
-  // Listado maestro de fracciones de tiempo (slots de 15 minutos)
   final List<String> _horariosTotales = [
-    '09:30', '09:45', '10:00', '10:15', '10:30', '10:45', '11:00', '11:15', 
+    '09:30', '09:45', '10:00', '10:15', '10:30', '10:45', '11:00', '11:15',
     '11:30', '11:45', '12:00', '12:15', '12:30', '12:45', '13:00', '13:15',
-    '16:00', '16:15', '16:30', '16:45', '17:00', '17:15', '17:30', '17:45', 
-    '18:00', '18:15', '18:30', '18:45', '19:00', '19:15', '19:30', '19:45'
+    '16:00', '16:15', '16:30', '16:45', '17:00', '17:15', '17:30', '17:45',
+    '18:00', '18:15', '18:30', '18:45', '19:00', '19:15', '19:30', '19:45',
   ];
 
-  // --- Lógica de filtrado de Firebase ---
+  FirebaseFirestore get _db => FirebaseFirestore.instance;
+  FirebaseAuth get _auth => FirebaseAuth.instance;
+
+  // ─── Lógica de reservas ──────────────────────────────────────────────────────
+
   Future<void> _obtenerCitasDelDia(DateTime fecha) async {
-    setState(() { 
-      _horasOcupadas = []; 
-      _horaSeleccionada = null; 
-      _diaBloqueadoPorAdmin = false; 
+    setState(() {
+      _horasOcupadas = [];
+      _horaSeleccionada = null;
+      _diaBloqueadoPorAdmin = false;
     });
 
-    // 1. Verificación de seguridad: ¿Está el día cerrado por el Admin?
-    String idDia = "${fecha.year}-${fecha.month.toString().padLeft(2, '0')}-${fecha.day.toString().padLeft(2, '0')}";
-    var docBloqueado = await FirebaseFirestore.instance.collection('dias_bloqueados').doc(idDia).get();
-    
-    if (docBloqueado.exists && docBloqueado.data()?['bloqueado'] == true) {
-      setState(() { _diaBloqueadoPorAdmin = true; });
-      return; 
+    final idDia = _idDia(fecha);
+    final docBloqueado = await _db
+        .collection(Colecciones.diasBloqueados).doc(idDia).get();
+    if (docBloqueado.exists && docBloqueado.data()?[Campos.bloqueado] == true) {
+      setState(() => _diaBloqueadoPorAdmin = true);
+      return;
     }
 
-    // 2. Si el día está abierto, calculamos qué huecos están ya reservados
-    DateTime inicioDia = DateTime(fecha.year, fecha.month, fecha.day, 0, 0);
-    DateTime finDia = DateTime(fecha.year, fecha.month, fecha.day, 23, 59);
-
-    var snapshot = await FirebaseFirestore.instance
-        .collection('citas')
-        .where('fecha', isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDia))
-        .where('fecha', isLessThanOrEqualTo: Timestamp.fromDate(finDia))
+    final inicioDia = _inicioDia(fecha);
+    final finDia = _finDia(fecha);
+    final snapshot = await _db
+        .collection(Colecciones.citas)
+        .where(Campos.fecha, isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDia))
+        .where(Campos.fecha, isLessThanOrEqualTo:    Timestamp.fromDate(finDia))
         .get();
 
-    List<String> bloqueadas = [];
+    final bloqueadas = <String>[];
     for (var doc in snapshot.docs) {
-      String horaInicio = doc['hora'];
-      int duracionCita = doc['duracion'] ?? 30;
-      
-      // Calculamos cuántos tramos de 15 minutos "ocupa" la cita existente
-      int bloquesOcupados = (duracionCita / 15).ceil();
-      int indiceInicio = _horariosTotales.indexOf(horaInicio);
-
+      final horaInicio   = doc[Campos.hora] as String;
+      final duracionCita = _leerEntero(doc[Campos.duracion], valorDefecto: 30);
+      final bloquesOcup = (duracionCita / 15).ceil();
+      final indiceInicio = _horariosTotales.indexOf(horaInicio);
       if (indiceInicio != -1) {
-        for (int i = 0; i < bloquesOcupados; i++) {
+        for (int i = 0; i < bloquesOcup; i++) {
           if (indiceInicio + i < _horariosTotales.length) {
             bloqueadas.add(_horariosTotales[indiceInicio + i]);
           }
         }
       }
     }
-    setState(() { _horasOcupadas = bloqueadas; });
+    setState(() => _horasOcupadas = bloqueadas);
   }
 
-  // --- El Algoritmo de Disponibilidad ---
-  // Este método filtra los horarios basándose en la duración del servicio actual
   List<String> get _horariosDisponibles {
-    if (_fechaSeleccionada == null || _diaBloqueadoPorAdmin) return []; 
-    
-    DateTime ahora = DateTime.now();
-    bool esHoy = _fechaSeleccionada!.day == ahora.day && 
-                 _fechaSeleccionada!.month == ahora.month &&
-                 _fechaSeleccionada!.year == ahora.year;
-
-    // Calculamos cuántos huecos de 15 min seguidos necesitamos
-    int bloquesNecesarios = (widget.duracion / 15).ceil();
-
+    if (_fechaSeleccionada == null || _diaBloqueadoPorAdmin) return [];
+    final ahora = DateTime.now();
+    final esHoy = _mismoDia(_fechaSeleccionada!, ahora);
+    final bloquesNecesarios = (widget.duracion / 15).ceil();
     return _horariosTotales.where((h) {
-      int indiceActual = _horariosTotales.indexOf(h);
-      
-      // Si la reserva es para hoy, no permitimos elegir horas que ya han pasado
+      final idx = _horariosTotales.indexOf(h);
       if (esHoy) {
-        int horaH = int.parse(h.split(':')[0]);
-        int minH = int.parse(h.split(':')[1]);
-        DateTime horaSlot = DateTime(ahora.year, ahora.month, ahora.day, horaH, minH);
-        if (horaSlot.isBefore(ahora)) return false;
+        final partesHora = h.split(':');
+        final hh = int.parse(partesHora[0]);
+        final mm = int.parse(partesHora[1]);
+        if (DateTime(ahora.year, ahora.month, ahora.day, hh, mm).isBefore(ahora)) return false;
       }
-
-      // Verificamos si hay espacio suficiente para la duración total del servicio
       for (int i = 0; i < bloquesNecesarios; i++) {
-        int indiceAComprobar = indiceActual + i;
-        
-        if (indiceAComprobar >= _horariosTotales.length) return false;
-        if (_horasOcupadas.contains(_horariosTotales[indiceAComprobar])) return false;
-
-        // Validación extra: No permitimos que una cita se solape entre el turno de mañana y tarde
+        final check = idx + i;
+        if (check >= _horariosTotales.length) return false;
+        if (_horasOcupadas.contains(_horariosTotales[check])) return false;
         if (i < bloquesNecesarios - 1) {
-          int sigIdx = indiceAComprobar + 1;
+          final sigIdx = check + 1;
           if (sigIdx >= _horariosTotales.length) return false;
-
-          int h1 = int.parse(_horariosTotales[indiceAComprobar].split(':')[0]);
-          int h2 = int.parse(_horariosTotales[sigIdx].split(':')[0]);
-          if ((h2 - h1).abs() > 1) return false; 
+          final h1 = int.parse(_horariosTotales[check].split(':')[0]);
+          final h2 = int.parse(_horariosTotales[sigIdx].split(':')[0]);
+          if ((h2 - h1).abs() > 1) return false;
         }
       }
       return true;
     }).toList();
   }
 
-  // --- Selector de Fecha con reglas de negocio ---
   Future<void> _elegirFecha() async {
-    DateTime? fechaElegida = await showDatePicker(
+    DateTime? fecha = await showDatePicker(
       context: context,
       initialDate: DateTime.now(),
-      firstDate: DateTime.now(),
-      lastDate: DateTime.now().add(const Duration(days: 30)),
+      firstDate:   DateTime.now(),
+      lastDate:    DateTime.now().add(const Duration(days: 30)),
       locale: const Locale('es', 'ES'),
-      // Excluimos fines de semana porque la barbería cierra
-      selectableDayPredicate: (DateTime day) {
-        return day.weekday != DateTime.saturday && day.weekday != DateTime.sunday;
-      },
-      builder: (context, child) {
-        return Theme(
-          data: ThemeData.dark().copyWith(
-            colorScheme: const ColorScheme.dark(
-              primary: Colors.amber, onPrimary: Colors.black, surface: Colors.black, onSurface: Colors.white,
-            ),
-          ),
-          child: child!,
-        );
-      },
+      selectableDayPredicate: (d) =>
+          d.weekday != DateTime.saturday && d.weekday != DateTime.sunday,
+      builder: UiUtils.temaDatePicker,
     );
-
-    if (fechaElegida != null) {
-      setState(() => _fechaSeleccionada = fechaElegida);
-      _obtenerCitasDelDia(fechaElegida);
+    if (fecha != null) {
+      setState(() => _fechaSeleccionada = fecha);
+      _obtenerCitasDelDia(fecha);
     }
   }
 
-  // --- Confirmación y Guardado en Firestore ---
   Future<void> _confirmarReserva() async {
     if (_fechaSeleccionada == null || _horaSeleccionada == null || _diaBloqueadoPorAdmin) return;
-    setState(() { _estaGuardando = true; });
+    final confirma = await _mostrarConfirmacionReserva();
+    if (!mounted) return;
+    if (confirma != true) return;
 
+    setState(() => _estaGuardando = true);
     try {
-      final String uid = FirebaseAuth.instance.currentUser!.uid;
-      
-      // Control de Spam: Validamos que el cliente no tenga ya otra cita el mismo día
-      DateTime inicioDia = DateTime(_fechaSeleccionada!.year, _fechaSeleccionada!.month, _fechaSeleccionada!.day, 0, 0);
-      DateTime finDia = DateTime(_fechaSeleccionada!.year, _fechaSeleccionada!.month, _fechaSeleccionada!.day, 23, 59);
-
-      var consulta = await FirebaseFirestore.instance
-          .collection('citas')
-          .where('clienteId', isEqualTo: uid)
-          .where('fecha', isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDia))
-          .where('fecha', isLessThanOrEqualTo: Timestamp.fromDate(finDia))
+      final uid = _auth.currentUser!.uid;
+      final inicioDia = _inicioDia(_fechaSeleccionada!);
+      final finDia = _finDia(_fechaSeleccionada!);
+      final consulta = await _db
+          .collection(Colecciones.citas)
+          .where(Campos.clienteId, isEqualTo: uid)
+          .where(Campos.fecha, isGreaterThanOrEqualTo: Timestamp.fromDate(inicioDia))
+          .where(Campos.fecha, isLessThanOrEqualTo:    Timestamp.fromDate(finDia))
           .get();
-
-      if (consulta.docs.isNotEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Ya tienes una cita para este día. Si necesitas cambiarla, cancela primero la otra en "Mis Citas".'),
-              backgroundColor: Colors.orange,
-              duration: Duration(seconds: 4),
-            ),
-          );
-        }
-        setState(() { _estaGuardando = false; });
-        return; 
-      }
-
-      // Preparamos el objeto final para subirlo a la nube
-      List<String> partesHora = _horaSeleccionada!.split(':');
-      DateTime fechaCitaCompleta = DateTime(
-        _fechaSeleccionada!.year, _fechaSeleccionada!.month, _fechaSeleccionada!.day,
-        int.parse(partesHora[0]), int.parse(partesHora[1])
-      );
-
-      await FirebaseFirestore.instance.collection('citas').add({
-        'clienteId': uid,
-        'nombreCliente': widget.nombreCliente,
-        'servicio': widget.nombreServicio,
-        'precio': widget.precio,
-        'duracion': widget.duracion,
-        'fecha': Timestamp.fromDate(fechaCitaCompleta),
-        'hora': _horaSeleccionada,
-        'estado': 'pendiente',
-        'fechaCreacion': DateTime.now(),
+      final tieneCitaActiva = consulta.docs.any((doc) {
+        final datos = doc.data();
+        final estado = datos[Campos.estado] as String? ?? EstadoCita.pendiente;
+        return estado != EstadoCita.completada;
       });
-
+      if (tieneCitaActiva) {
+        if (mounted) UiUtils.mostrarMensaje(context,
+          'Ya tienes una cita para este día. Cancela la otra en "Mis Citas" si quieres cambiarla.',
+          AppTheme.warning);
+        setState(() => _estaGuardando = false); return;
+      }
+      final partes = _horaSeleccionada!.split(':');
+      final fechaCita = DateTime(
+        _fechaSeleccionada!.year, _fechaSeleccionada!.month, _fechaSeleccionada!.day,
+        int.parse(partes[0]), int.parse(partes[1]),
+      );
+      await _db.collection(Colecciones.citas).add({
+        Campos.clienteId:     uid,
+        Campos.nombreCliente: widget.nombreCliente,
+        Campos.servicio:      widget.nombreServicio,
+        Campos.precio:        widget.precio,
+        Campos.duracion:      widget.duracion,
+        Campos.fecha:         Timestamp.fromDate(fechaCita),
+        Campos.hora:          _horaSeleccionada,
+        Campos.estado:        EstadoCita.pendiente,
+        Campos.fechaCreacion: DateTime.now(),
+      });
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('¡Cita reservada con éxito!'), backgroundColor: Colors.green)
-        );
+        UiUtils.mostrarMensaje(context, '¡Cita reservada con éxito!', AppTheme.success);
       }
     } catch (e) {
-      setState(() { _estaGuardando = false; });
-      // El print lo mantenemos para depuración rápida en VS Code
-      print('🚨 ERROR FIREBASE: $e'); 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Error: Mira la consola de VS Code (Debug Console) para solucionar el problema.'),
-            backgroundColor: Colors.redAccent,
-            duration: Duration(seconds: 6),
-          ),
-        );
-      }
+      setState(() => _estaGuardando = false);
+      debugPrint('🚨 ERROR FIREBASE: $e');
+      if (mounted) UiUtils.mostrarMensaje(context, 'Error al reservar. Revisa la consola.', AppTheme.error);
     }
   }
+
+  Future<bool?> _mostrarConfirmacionReserva() {
+    final fecha = _fechaSeleccionada;
+    final hora = _horaSeleccionada;
+    if (fecha == null || hora == null) return Future.value(false);
+
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirmar reserva'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('¿Estás seguro de reservar esta cita?', style: AppTheme.bodyMedium),
+            const SizedBox(height: 16),
+            _filaResumenConfirmacion(
+              Icons.calendar_month_outlined,
+              'Día',
+              UiUtils.formatearFecha(fecha),
+            ),
+            const SizedBox(height: 10),
+            _filaResumenConfirmacion(Icons.access_time_outlined, 'Hora', hora),
+            const SizedBox(height: 10),
+            _filaResumenConfirmacion(
+              Icons.content_cut_outlined,
+              'Servicio',
+              widget.nombreServicio,
+            ),
+            const SizedBox(height: 22),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Confirmar'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Cancelar'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _filaResumenConfirmacion(IconData icono, String etiqueta, String valor) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icono, color: AppTheme.gold, size: 18),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(etiqueta, style: AppTheme.bodySmall),
+              const SizedBox(height: 2),
+              Text(valor, style: AppTheme.titleSmall),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  int _leerEntero(dynamic valor, {int valorDefecto = 0}) {
+    if (valor is int) return valor;
+    if (valor is num) return valor.toInt();
+    if (valor is String) return int.tryParse(valor) ?? valorDefecto;
+    return valorDefecto;
+  }
+
+  DateTime _inicioDia(DateTime fecha) {
+    return DateTime(fecha.year, fecha.month, fecha.day, 0, 0);
+  }
+
+  DateTime _finDia(DateTime fecha) {
+    return DateTime(fecha.year, fecha.month, fecha.day, 23, 59);
+  }
+
+  String _idDia(DateTime fecha) {
+    return '${fecha.year}-${fecha.month.toString().padLeft(2, '0')}-${fecha.day.toString().padLeft(2, '0')}';
+  }
+
+  bool _mismoDia(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  // ─── UI ─────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('RESERVAR CITA'), backgroundColor: Colors.black, centerTitle: true),
-      // SafeArea protege el contenido de los bordes y el notch del móvil
+      appBar: AppBar(title: const Text('Reservar cita')),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
               _resumenServicio(),
-              const SizedBox(height: 30),
+              const SizedBox(height: 28),
               _botonFecha(),
-              const SizedBox(height: 30),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text('2. Selecciona la hora', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.amber)),
+              const SizedBox(height: 28),
+              _stepLabel(2, '2. Selecciona la hora'),
+              const SizedBox(height: 12),
+              Expanded(child: _cuerpoHoras()),
+              const SizedBox(height: 12),
+              ElevatedButton(
+                onPressed: (_estaGuardando || _diaBloqueadoPorAdmin || _horaSeleccionada == null)
+                    ? null
+                    : _confirmarReserva,
+                child: _estaGuardando
+                    ? SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.black))
+                    : const Text('CONFIRMAR RESERVA'),
               ),
-              const SizedBox(height: 10),
-              
-              // El cuerpo central varía según si el día está elegido, libre o bloqueado
-              Expanded(
-                child: _fechaSeleccionada == null
-                    ? const Center(child: Text('Selecciona un día (Lunes a Viernes)', style: TextStyle(color: Colors.white54)))
-                    : _diaBloqueadoPorAdmin 
-                        ? const Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.event_busy, color: Colors.redAccent, size: 60),
-                                SizedBox(height: 15),
-                                Text('DÍA NO DISPONIBLE', style: TextStyle(color: Colors.redAccent, fontSize: 20, fontWeight: FontWeight.bold)),
-                                SizedBox(height: 10),
-                                Text('La barbería permanecerá cerrada\no no admite más reservas este día.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70)),
-                              ],
-                            )
-                          )
-                        : _horariosDisponibles.isEmpty
-                            ? const Center(child: Text('No hay huecos libres para este servicio hoy.', style: TextStyle(color: Colors.redAccent), textAlign: TextAlign.center))
-                            : GridView.builder(
-                                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: 4, childAspectRatio: 2.1, crossAxisSpacing: 8, mainAxisSpacing: 8
-                                ),
-                                itemCount: _horariosDisponibles.length,
-                                itemBuilder: (context, index) {
-                                  String hora = _horariosDisponibles[index];
-                                  bool sel = _horaSeleccionada == hora;
-                                  return GestureDetector(
-                                    onTap: () => setState(() => _horaSeleccionada = hora),
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        color: sel ? Colors.amber : Colors.black,
-                                        border: Border.all(color: Colors.amber),
-                                        borderRadius: BorderRadius.circular(8)
-                                      ),
-                                      alignment: Alignment.center,
-                                      child: Text(hora, style: TextStyle(color: sel ? Colors.black : Colors.amber, fontWeight: FontWeight.bold, fontSize: 13)),
-                                    ),
-                                  );
-                                },
-                              ),
-              ),
-              const SizedBox(height: 10),
-              
-              SizedBox(
-                width: double.infinity, height: 55,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black),
-                  onPressed: (_estaGuardando || _diaBloqueadoPorAdmin) ? null : _confirmarReserva,
-                  child: _estaGuardando 
-                    ? const CircularProgressIndicator(color: Colors.black) 
-                    : const Text('CONFIRMAR RESERVA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                ),
-              ),
-              const SizedBox(height: 10), 
+              const SizedBox(height: 8),
             ],
           ),
         ),
@@ -316,22 +311,46 @@ class _PantallaReservaState extends State<PantallaReserva> {
     );
   }
 
-  // --- Componentes visuales secundarios ---
-
   Widget _resumenServicio() {
     return Container(
-      padding: const EdgeInsets.all(15),
-      decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.white12)),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color:        AppTheme.surface,
+        borderRadius: BorderRadius.circular(AppTheme.radiusL),
+        border:       Border.all(color: AppTheme.divider, width: 0.5),
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(widget.nombreServicio, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-            Text('${widget.duracion} min', style: const TextStyle(color: Colors.white54)),
+            Text(widget.nombreServicio, style: AppTheme.titleMedium),
+            const SizedBox(height: 5),
+            Row(children: [
+              Icon(Icons.schedule_outlined, size: 13, color: AppTheme.textHint),
+              const SizedBox(width: 4),
+              Text('${widget.duracion} min', style: AppTheme.bodySmall),
+            ]),
           ]),
-          Text('${widget.precio}€', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.amber)),
+          Text('${widget.precio}€', style: AppTheme.priceTag),
         ],
       ),
+    );
+  }
+
+  Widget _stepLabel(int num, String texto) {
+    return Row(
+      children: [
+        Container(
+          width: 24, height: 24,
+          decoration: const BoxDecoration(color: AppTheme.gold, shape: BoxShape.circle),
+          alignment: Alignment.center,
+          child: Text('$num',
+              style: AppTheme.bodySmall.copyWith(
+                  color: AppTheme.black, fontWeight: FontWeight.bold)),
+        ),
+        const SizedBox(width: 10),
+        Text(texto, style: AppTheme.titleSmall),
+      ],
     );
   }
 
@@ -339,20 +358,78 @@ class _PantallaReservaState extends State<PantallaReserva> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('1. Selecciona el día', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.amber)),
-        const SizedBox(height: 10),
+        _stepLabel(1, '1. Selecciona el día'),
+        const SizedBox(height: 12),
         SizedBox(
           width: double.infinity, height: 50,
-          child: ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.grey[900], foregroundColor: Colors.white),
-            icon: const Icon(Icons.calendar_month, color: Colors.amber),
-            label: Text(_fechaSeleccionada == null 
-              ? 'Tocar para elegir fecha' 
-              : '${_fechaSeleccionada!.day}/${_fechaSeleccionada!.month}/${_fechaSeleccionada!.year}'),
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.calendar_month_outlined),
+            label: Text(
+              _fechaSeleccionada == null
+                  ? 'Toca para elegir fecha'
+                  : '${_fechaSeleccionada!.day}/${_fechaSeleccionada!.month}/${_fechaSeleccionada!.year}',
+            ),
             onPressed: _elegirFecha,
           ),
         ),
       ],
+    );
+  }
+
+  Widget _cuerpoHoras() {
+    if (_fechaSeleccionada == null) {
+      return Center(child: Text('Selecciona un día (lunes a viernes)', style: AppTheme.bodyMedium));
+    }
+    if (_diaBloqueadoPorAdmin) {
+      return Center(
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(Icons.event_busy_outlined, color: AppTheme.error, size: 52),
+          const SizedBox(height: 14),
+          Text('Día no disponible',
+              style: AppTheme.titleMedium.copyWith(color: AppTheme.error)),
+          const SizedBox(height: 8),
+          Text('La barbería está cerrada este día.',
+              style: AppTheme.bodyMedium, textAlign: TextAlign.center),
+        ]),
+      );
+    }
+    final horariosDisponibles = _horariosDisponibles;
+    if (horariosDisponibles.isEmpty) {
+      return Center(
+        child: Text('No hay huecos libres para este servicio hoy.',
+            style: AppTheme.bodyMedium, textAlign: TextAlign.center),
+      );
+    }
+    return GridView.builder(
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 4, childAspectRatio: 2.2,
+        crossAxisSpacing: 8, mainAxisSpacing: 8,
+      ),
+      itemCount: horariosDisponibles.length,
+      itemBuilder: (context, index) {
+        final hora = horariosDisponibles[index];
+        final sel  = _horaSeleccionada == hora;
+        return GestureDetector(
+          onTap: () => setState(() => _horaSeleccionada = hora),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+            decoration: BoxDecoration(
+              color:        sel ? AppTheme.gold : AppTheme.surface,
+              border:       Border.all(color: sel ? AppTheme.gold : AppTheme.divider),
+              borderRadius: BorderRadius.circular(AppTheme.radiusM),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              hora,
+              style: AppTheme.titleSmall.copyWith(
+                color:      sel ? AppTheme.black : AppTheme.textSecond,
+                fontSize:   13,
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

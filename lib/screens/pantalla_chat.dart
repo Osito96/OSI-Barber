@@ -1,8 +1,12 @@
-import 'package:flutter/material.dart';
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'dart:convert';
+
+import '../core/app_theme.dart';
+import '../core/constants.dart';
 
 class PantallaChat extends StatefulWidget {
   final String clienteId;
@@ -19,250 +23,215 @@ class PantallaChat extends StatefulWidget {
 }
 
 class _PantallaChatState extends State<PantallaChat> {
-  // --- Controladores y Variables ---
-  final TextEditingController _controladorMensaje = TextEditingController();
+  final TextEditingController _ctrlMensaje = TextEditingController();
   final String _miUid = FirebaseAuth.instance.currentUser!.uid;
-  
-  // Saber si soy el barbero o el cliente cambia la lógica de a quién le llega la notificación
   late bool _soyAdmin;
-  
-  // El "túnel" de conexión constante con la base de datos para leer mensajes
-  late Stream<QuerySnapshot> _mensajesStream; 
+  late Stream<QuerySnapshot> _mensajesStream;
+
+  FirebaseFirestore get _db => FirebaseFirestore.instance;
+
+  @override
+  void dispose() {
+    _ctrlMensaje.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
     super.initState();
-    // Si mi ID no es el mismo que el ID del cliente del chat, significa que yo soy el Admin
     _soyAdmin = _miUid != widget.clienteId;
-    
     _resetearNotificaciones();
-    
-    // Conectamos el "túnel" ordenando los mensajes para que los nuevos salgan abajo
-    _mensajesStream = FirebaseFirestore.instance
-        .collection('chats')
+    _mensajesStream = _db
+        .collection(Colecciones.chats)
         .doc(widget.clienteId)
-        .collection('mensajes')
-        .orderBy('timestamp', descending: true)
+        .collection(Colecciones.mensajes)
+        .orderBy(Campos.timestamp, descending: true)
         .snapshots();
   }
 
-  // --- Limpiar contadores (Bolita roja) ---
-  // Cuando entramos al chat, le decimos a Firebase que ya hemos leído todo
   void _resetearNotificaciones() {
-    FirebaseFirestore.instance.collection('chats').doc(widget.clienteId).set({
-      _soyAdmin ? 'noLeidosAdmin' : 'noLeidosCliente': 0,
+    _db
+        .collection(Colecciones.chats)
+        .doc(widget.clienteId)
+        .set({
+      _campoNotificacionesPendientes(): 0,
     }, SetOptions(merge: true));
   }
 
-  // --- Lógica de Envío de Mensaje y Notificación Push ---
+  String _campoNotificacionesPendientes() {
+    return _soyAdmin ? Campos.noLeidosAdmin : Campos.noLeidosCliente;
+  }
+
+  String _campoNotificacionesDestino() {
+    return _soyAdmin ? Campos.noLeidosCliente : Campos.noLeidosAdmin;
+  }
+
   Future<void> _enviarMensaje() async {
-    // Evitamos mandar mensajes vacíos o llenos de espacios
-    if (_controladorMensaje.text.trim().isEmpty) return;
+    if (_ctrlMensaje.text.trim().isEmpty) return;
+    final texto = _ctrlMensaje.text.trim();
+    _ctrlMensaje.clear();
 
-    String textoMensaje = _controladorMensaje.text.trim();
-    _controladorMensaje.clear();
-
-    // 1. Guardamos el mensaje físico dentro de la subcolección 'mensajes' del cliente
-    await FirebaseFirestore.instance.collection('chats').doc(widget.clienteId).collection('mensajes').add({
-      'emisorId': _miUid,
-      'texto': textoMensaje,
-      'timestamp': FieldValue.serverTimestamp(),
+    await _db
+        .collection(Colecciones.chats)
+        .doc(widget.clienteId)
+        .collection(Colecciones.mensajes)
+        .add({
+      Campos.emisorId:  _miUid,
+      Campos.texto:     texto,
+      Campos.timestamp: FieldValue.serverTimestamp(),
     });
 
-    // 2. Actualizamos el "resumen" del chat para que salga en la lista general con la bolita roja
-    await FirebaseFirestore.instance.collection('chats').doc(widget.clienteId).set({
-      'ultimoMensaje': textoMensaje,
-      'timestamp': FieldValue.serverTimestamp(),
-      'clienteId': widget.clienteId,
-      // Si soy admin, le sumo un "no leído" al cliente, y viceversa
-      _soyAdmin ? 'noLeidosCliente' : 'noLeidosAdmin': FieldValue.increment(1),
+    final clienteDoc = await _db
+        .collection(Colecciones.clientes).doc(widget.clienteId).get();
+    final nombreCliente = clienteDoc.data()?[Campos.nombre]     ?? 'Cliente';
+    final fotoPerfil    = clienteDoc.data()?[Campos.fotoPerfil] ?? '';
+
+    await _db
+        .collection(Colecciones.chats)
+        .doc(widget.clienteId)
+        .set({
+      Campos.ultimoMensaje: texto,
+      Campos.timestamp:     FieldValue.serverTimestamp(),
+      Campos.clienteId:     widget.clienteId,
+      Campos.nombreCliente: nombreCliente,
+      Campos.fotoPerfil:    fotoPerfil,
+      _campoNotificacionesDestino(): FieldValue.increment(1),
     }, SetOptions(merge: true));
 
-    // ==========================================================
-    // 3. INTEGRACIÓN CON ONESIGNAL (NOTIFICACIONES PUSH DINÁMICAS)
-    // ==========================================================
+    // Push notification
     String receptorId = '';
-    String remitente = _soyAdmin ? 'OSI Barber' : 'Nuevo mensaje de cliente';
-
+    String remitente  = _soyAdmin ? 'OSI Barber' : 'Nuevo mensaje';
     if (_soyAdmin) {
-      // Si yo soy el barbero, el mensaje va directo al móvil del cliente con el que chateo
       receptorId = widget.clienteId;
     } else {
-      // Si soy un cliente, busco dinámicamente en la base de datos quién es el administrador actual
-      var queryAdmin = await FirebaseFirestore.instance
-          .collection('clientes')
-          .where('esAdmin', isEqualTo: true)
-          .limit(1)
-          .get();
-          
-      if (queryAdmin.docs.isNotEmpty) {
-        receptorId = queryAdmin.docs.first.id; // Obtenemos el ID real del admin directamente de Firestore
-      }
+      final queryAdmin = await _db
+          .collection(Colecciones.clientes)
+          .where(Campos.esAdmin, isEqualTo: true).limit(1).get();
+      if (queryAdmin.docs.isNotEmpty) receptorId = queryAdmin.docs.first.id;
     }
-
-    // Si por algún motivo raro no hay receptor válido, cancelamos la notificación para que la app no pete
     if (receptorId.isEmpty) return;
 
-    // Construimos la petición HTTP POST hacia la API de OneSignal
-    var url = Uri.parse('https://onesignal.com/api/v1/notifications');
-    var body = jsonEncode({
-      "app_id": "TU_ONESIGNAL_ID_APP_AQUI",
-      "target_channel": "push",
-      "include_aliases": {
-        "external_id": [receptorId] 
-      },
-      "headings": {"en": remitente, "es": remitente}, // Título de la notificación
-      "contents": {"en": textoMensaje, "es": textoMensaje} // Cuerpo del mensaje
-    });
-
     try {
-      // Lanzamos la petición a los servidores de OneSignal
       await http.post(
-        url,
+        Uri.parse('https://onesignal.com/api/v1/notifications'),
         headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Basic TU_CLAVE_REST_API_AQUI" // Clave REST API de OneSignal
+          'Content-Type': 'application/json',
+          'Authorization': 'Basic TU_CLAVE_REST_API_AQUI',
         },
-        body: body,
+        body: jsonEncode({
+          'app_id':         'TU_ONESIGNAL_ID_APP_AQUI',
+          'target_channel': 'push',
+          'include_aliases': {'external_id': [receptorId]},
+          'headings':  {'en': remitente, 'es': remitente},
+          'contents':  {'en': texto,     'es': texto},
+        }),
       );
     } catch (e) {
-      debugPrint("Error al enviar push: $e");
+      debugPrint('Error al enviar push: $e');
     }
   }
+
+  // ─── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // --- AppBar (Cabecera del chat con foto) ---
       appBar: AppBar(
-        backgroundColor: Colors.black,
-        // Usamos un StreamBuilder aquí para que si el cliente cambia su foto mientras chateamos, se actualice en directo
-        title: StreamBuilder<DocumentSnapshot>(
-          stream: FirebaseFirestore.instance.collection('clientes').doc(widget.clienteId).snapshots(),
-          builder: (context, snapshot) {
-            String fotoPerfilText = '';
-            if (snapshot.hasData && snapshot.data!.exists) {
-              var datos = snapshot.data!.data() as Map<String, dynamic>;
-              fotoPerfilText = datos['fotoPerfil'] ?? '';
-            }
-
-            return Row(
-              children: [
-                CircleAvatar(
-                  radius: 18,
-                  backgroundColor: Colors.amber,
-                  backgroundImage: fotoPerfilText.isNotEmpty ? MemoryImage(base64Decode(fotoPerfilText)) : null,
-                  child: fotoPerfilText.isEmpty ? const Icon(Icons.person, size: 20, color: Colors.black) : null,
-                ),
-                const SizedBox(width: 15),
-                Expanded(
-                  child: Text(
-                    widget.nombreDestinatario,
-                    overflow: TextOverflow.ellipsis, 
-                  ),
-                ),
-              ],
-            );
-          },
-        ),
+        title: _tituloChat(),
+        titleSpacing: 0,
+        centerTitle: false,
       ),
-      
-      // --- Cuerpo del Chat ---
       body: SafeArea(
         child: Column(
           children: [
-            // 1. Zona donde se dibujan los mensajes (Lista invertida)
+            // Lista de mensajes
             Expanded(
               child: StreamBuilder<QuerySnapshot>(
-                stream: _mensajesStream, 
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator(color: Colors.amber));
+                stream: _mensajesStream,
+                builder: (context, snap) {
+                  if (snap.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
                   }
-                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                    return const Center(
-                      child: Text('Escribe el primer mensaje...', style: TextStyle(color: Colors.white54))
+                  if (!snap.hasData || snap.data!.docs.isEmpty) {
+                    return Center(
+                      child: Text('Escribe el primer mensaje…', style: AppTheme.bodyMedium),
                     );
                   }
-
                   return ListView.builder(
-                    reverse: true, // Esto hace que los mensajes nuevos empujen desde abajo hacia arriba (estilo WhatsApp)
-                    padding: const EdgeInsets.all(10),
-                    itemCount: snapshot.data!.docs.length,
+                    reverse: true,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    itemCount: snap.data!.docs.length,
                     itemBuilder: (context, index) {
-                      var mensajeDoc = snapshot.data!.docs[index];
-                      var mensaje = mensajeDoc.data() as Map<String, dynamic>;
-                      bool soyYoElEmisor = mensaje['emisorId'] == _miUid;
+                      final msg    = snap.data!.docs[index].data() as Map<String, dynamic>;
+                      final soyYo  = msg[Campos.emisorId] == _miUid;
+                      final fecha  = (msg[Campos.timestamp] as Timestamp?)?.toDate() ?? DateTime.now();
 
-                      // Protegemos la fecha por si Firebase tarda un milisegundo en procesar el serverTimestamp
-                      DateTime fechaMensaje = (mensaje['timestamp'] as Timestamp?)?.toDate() ?? DateTime.now();
-
-                      // Lógica compleja: ¿Mostramos el "Hoy" o "Ayer" encima del mensaje?
-                      // Solo lo mostramos si es el primer mensaje de la lista o si el mensaje anterior es de otro día distinto
-                      bool mostrarCabeceraFecha = false;
-                      if (index == snapshot.data!.docs.length - 1) {
-                        mostrarCabeceraFecha = true;
+                      bool mostrarFecha = false;
+                      if (index == snap.data!.docs.length - 1) {
+                        mostrarFecha = true;
                       } else {
-                        var mensajeAnterior = snapshot.data!.docs[index + 1].data() as Map<String, dynamic>;
-                        DateTime? fechaAnterior = (mensajeAnterior['timestamp'] as Timestamp?)?.toDate();
-                        
-                        if (fechaAnterior != null) {
-                          if (fechaMensaje.day != fechaAnterior.day || 
-                              fechaMensaje.month != fechaAnterior.month || 
-                              fechaMensaje.year != fechaAnterior.year) {
-                            mostrarCabeceraFecha = true;
-                          }
+                        final anterior = snap.data!.docs[index + 1].data() as Map<String, dynamic>;
+                        final fechaAnt = (anterior[Campos.timestamp] as Timestamp?)?.toDate();
+                        if (fechaAnt != null &&
+                            (fecha.day   != fechaAnt.day ||
+                             fecha.month != fechaAnt.month ||
+                             fecha.year  != fechaAnt.year)) {
+                          mostrarFecha = true;
                         }
                       }
 
-                      Widget burbuja = _construirBurbujaMensaje(mensaje['texto'] ?? '', soyYoElEmisor, fechaMensaje);
-
-                      // Si toca poner fecha, metemos la etiqueta y debajo la burbuja
-                      if (mostrarCabeceraFecha) {
-                        return Column(
-                          children: [
-                            _construirCabeceraFecha(fechaMensaje),
-                            burbuja,
-                          ],
-                        );
+                      final burbuja = _burbuja(msg[Campos.texto] ?? '', soyYo, fecha);
+                      if (mostrarFecha) {
+                        return Column(children: [_cabeceraFecha(fecha), burbuja]);
                       }
-                      return burbuja; // Si no, solo la burbuja
+                      return burbuja;
                     },
                   );
                 },
               ),
             ),
-            
-            // 2. Barra inferior para escribir (Input)
+            // Barra de input
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              color: Colors.grey[900],
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: const BoxDecoration(
+                color: AppTheme.surface,
+                border: Border(top: BorderSide(color: AppTheme.divider, width: 0.5)),
+              ),
               child: Row(
                 children: [
                   Expanded(
                     child: TextField(
-                      controller: _controladorMensaje,
-                      style: const TextStyle(color: Colors.white),
+                      controller: _ctrlMensaje,
+                      style: TextStyle(color: AppTheme.textPrimary),
                       decoration: InputDecoration(
-                        hintText: 'Mensaje',
-                        hintStyle: const TextStyle(color: Colors.white54),
-                        filled: true,
-                        fillColor: Colors.black,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(25), 
-                          borderSide: BorderSide.none
+                        hintText:    'Mensaje…',
+                        hintStyle:   TextStyle(color: AppTheme.textHint),
+                        filled:      true,
+                        fillColor:   AppTheme.surfaceHigh,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 10),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+                          borderSide:   BorderSide.none,
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+                          borderSide:   BorderSide.none,
                         ),
                       ),
                     ),
                   ),
                   const SizedBox(width: 8),
-                  CircleAvatar(
-                    backgroundColor: Colors.amber,
-                    radius: 25,
-                    child: IconButton(
-                      icon: const Icon(Icons.send, color: Colors.black), 
-                      onPressed: _enviarMensaje
+                  Material(
+                    color:  AppTheme.gold,
+                    shape:  const CircleBorder(),
+                    child: InkWell(
+                      customBorder: const CircleBorder(),
+                      onTap: _enviarMensaje,
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Icon(Icons.send_rounded, color: AppTheme.black, size: 20),
+                      ),
                     ),
                   ),
                 ],
@@ -274,57 +243,115 @@ class _PantallaChatState extends State<PantallaChat> {
     );
   }
 
-  // --- Widgets Auxiliares ---
+  // ─── Auxiliares ─────────────────────────────────────────────────────────────
 
-  // Crea la etiqueta gris centrada que dice "Hoy", "Ayer" o la fecha completa
-  Widget _construirCabeceraFecha(DateTime fecha) {
-    DateTime ahora = DateTime.now();
-    DateTime ayer = ahora.subtract(const Duration(days: 1));
-    String textoFecha = '';
-
-    if (fecha.year == ahora.year && fecha.month == ahora.month && fecha.day == ahora.day) {
-      textoFecha = 'Hoy';
-    } else if (fecha.year == ayer.year && fecha.month == ayer.month && fecha.day == ayer.day) {
-      textoFecha = 'Ayer';
-    } else {
-      textoFecha = '${fecha.day.toString().padLeft(2, '0')}/${fecha.month.toString().padLeft(2, '0')}/${fecha.year}';
+  Widget _tituloChat() {
+    if (_soyAdmin) {
+      return StreamBuilder<DocumentSnapshot>(
+        stream: _db.collection(Colecciones.clientes).doc(widget.clienteId).snapshots(),
+        builder: (context, snap) {
+          final datos = snap.hasData && snap.data!.exists
+              ? snap.data!.data() as Map<String, dynamic>
+              : <String, dynamic>{};
+          return _encabezadoChat(
+            (datos[Campos.nombre] as String?) ?? widget.nombreDestinatario,
+            (datos[Campos.fotoPerfil] as String?) ?? '',
+          );
+        },
+      );
     }
 
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 15),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.grey[850], 
-        borderRadius: BorderRadius.circular(10)
-      ),
-      child: Text(
-        textoFecha, 
-        style: const TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)
-      ),
+    return StreamBuilder<QuerySnapshot>(
+      stream: _db
+          .collection(Colecciones.clientes)
+          .where(Campos.esAdmin, isEqualTo: true)
+          .limit(1)
+          .snapshots(),
+      builder: (context, snap) {
+        final datos = snap.hasData && snap.data!.docs.isNotEmpty
+            ? snap.data!.docs.first.data() as Map<String, dynamic>
+            : <String, dynamic>{};
+        return _encabezadoChat(
+          widget.nombreDestinatario,
+          (datos[Campos.fotoPerfil] as String?) ?? '',
+        );
+      },
     );
   }
 
-  // Pinta el "globo" de texto. Si soy yo es dorado (derecha), si es el otro es gris oscuro (izquierda)
-  Widget _construirBurbujaMensaje(String texto, bool soyYo, DateTime fecha) {
-    String horaFormateada = '${fecha.hour.toString().padLeft(2, '0')}:${fecha.minute.toString().padLeft(2, '0')}';
+  Widget _encabezadoChat(String nombre, String foto) {
+    return Row(
+      children: [
+        CircleAvatar(
+          radius: 18,
+          backgroundColor: AppTheme.gold,
+          backgroundImage: foto.isNotEmpty ? MemoryImage(base64Decode(foto)) : null,
+          child: foto.isEmpty
+              ? Icon(Icons.person, size: 19, color: AppTheme.black)
+              : null,
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Text(
+            nombre,
+            overflow: TextOverflow.ellipsis,
+            style: AppTheme.titleSmall,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _cabeceraFecha(DateTime fecha) {
+    final ahora = DateTime.now();
+    final ayer  = ahora.subtract(const Duration(days: 1));
+    String texto;
+    if (fecha.year == ahora.year && fecha.month == ahora.month && fecha.day == ahora.day) {
+      texto = 'Hoy';
+    } else if (fecha.year == ayer.year && fecha.month == ayer.month && fecha.day == ayer.day) {
+      texto = 'Ayer';
+    } else {
+      texto = '${fecha.day.toString().padLeft(2, '0')}/${fecha.month.toString().padLeft(2, '0')}/${fecha.year}';
+    }
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+      decoration: BoxDecoration(
+        color:        AppTheme.surfaceHigh,
+        borderRadius: BorderRadius.circular(AppTheme.radiusFull),
+      ),
+      child: Text(texto,
+          style: AppTheme.bodySmall.copyWith(color: AppTheme.textSecond)),
+    );
+  }
+
+  Widget _burbuja(String texto, bool soyYo, DateTime fecha) {
+    final hora  = '${fecha.hour.toString().padLeft(2, '0')}:${fecha.minute.toString().padLeft(2, '0')}';
+    const miColor    = Color(0xFF3B2800); // fondo oscuro dorado
+    const miTexto    = AppTheme.textPrimary;
+    const otroColor  = AppTheme.surfaceHigh;
+    const otroTexto  = AppTheme.textPrimary;
 
     return Align(
       alignment: soyYo ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
-        // Para que la burbuja no ocupe toda la pantalla y haga saltos de línea elegantes
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75
-        ), 
-        margin: const EdgeInsets.only(bottom: 8, left: 10, right: 10),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
+        margin: EdgeInsets.only(
+          bottom: 6,
+          left:  soyYo ? 48 : 10,
+          right: soyYo ? 10 : 48,
+        ),
         padding: const EdgeInsets.only(left: 12, right: 10, top: 10, bottom: 6),
         decoration: BoxDecoration(
-          color: soyYo ? Colors.amber : const Color(0xFF202C33), 
-          // Este borderRadius hace el efecto del piquito de la burbuja (estilo WhatsApp)
+          color: soyYo ? miColor : otroColor,
+          border: soyYo
+              ? Border.all(color: AppTheme.gold.withValues(alpha: 0.25), width: 0.5)
+              : null,
           borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(15),
-            topRight: const Radius.circular(15),
-            bottomLeft: soyYo ? const Radius.circular(15) : const Radius.circular(0),
-            bottomRight: soyYo ? const Radius.circular(0) : const Radius.circular(15),
+            topLeft:     const Radius.circular(16),
+            topRight:    const Radius.circular(16),
+            bottomLeft:  soyYo ? const Radius.circular(16) : const Radius.circular(2),
+            bottomRight: soyYo ? const Radius.circular(2)  : const Radius.circular(16),
           ),
         ),
         child: Wrap(
@@ -334,21 +361,21 @@ class _PantallaChatState extends State<PantallaChat> {
             Text(
               texto,
               style: TextStyle(
-                color: soyYo ? Colors.black : Colors.white,
-                fontSize: 16,
-                fontWeight: soyYo ? FontWeight.w500 : FontWeight.normal,
+                color:      soyYo ? miTexto : otroTexto,
+                fontSize:   15,
+                fontWeight: soyYo ? FontWeight.w500 : FontWeight.w400,
               ),
             ),
-            const SizedBox(width: 10), 
+            const SizedBox(width: 8),
             Padding(
-              padding: const EdgeInsets.only(bottom: 2), 
-              child: Text(
-                horaFormateada,
-                style: TextStyle(
-                  color: soyYo ? Colors.black54 : Colors.white54,
-                  fontSize: 11,
-                ),
-              ),
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Text(hora,
+                  style: TextStyle(
+                    color:    soyYo
+                        ? AppTheme.gold.withValues(alpha: 0.6)
+                        : AppTheme.textHint,
+                    fontSize: 11,
+                  )),
             ),
           ],
         ),
