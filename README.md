@@ -1,173 +1,292 @@
-# 💈 OSI Barber: Gestión de Barbería 4.0
+# 💈 OSI Barber
 
-[![Flutter](https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
-[![Firebase](https://img.shields.io/badge/Firebase-Auth%20%26%20Firestore-FFCA28?logo=firebase&logoColor=black)](https://firebase.google.com/)
-[![OneSignal](https://img.shields.io/badge/Notifications-OneSignal-E44B32?logo=onesignal&logoColor=white)](https://onesignal.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Flutter](https://img.shields.io/badge/Flutter-Mobile%20App-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
+[![Firebase](https://img.shields.io/badge/Firebase-Auth%20%2B%20Firestore-FFCA28?logo=firebase&logoColor=black)](https://firebase.google.com/)
+[![Dart](https://img.shields.io/badge/Dart-%5E3.11.0-0175C2?logo=dart&logoColor=white)](https://dart.dev/)
 
----
+**OSI Barber** es una aplicación móvil desarrollada en Flutter para gestionar reservas, clientes, comunicación y fidelización en una barbería.
 
-### 🌐 Idioma / Language
-**[Castellano](#versión-en-español)** | **[English](#english-version)**
+El proyecto forma parte de un **Trabajo de Fin de Grado de Desarrollo de Aplicaciones Multiplataforma** y busca digitalizar el flujo habitual de una barbería: reserva de citas, control de agenda, comunicación cliente-barbero, gestión de servicios, cupones y estadísticas básicas del negocio.
 
 ---
 
-## Versión en Español
+## Índice
 
-> **OSI Barber** no es solo una app de reservas; es un ecosistema completo para automatizar el flujo de trabajo de una barbería profesional, fidelizar clientes y optimizar la rentabilidad del negocio.
-
----
-
-## 📖 Guía de la Aplicación
-
-La aplicación se divide en dos experiencias totalmente diferenciadas según el rol del usuario (Cliente o Administrador), gestionadas dinámicamente desde el login.
-
-### 👤 Experiencia del Cliente (Fidelización y Autogestión)
-1.  **Reserva en Segundos:** El cliente selecciona un servicio y visualiza un calendario dinámico que solo muestra huecos reales disponibles.
-2.  **Gamificación (Citas V):** Por cada asistencia, el usuario suma puntos. Si falta sin avisar, recibe una "Cita X".
-3.  **Marketplace de Cupones:** Los puntos acumulados se canjean por servicios gratuitos o descuentos mediante un sistema de validación visual con el barbero.
-4.  **Comunicación Directa:** Chat integrado con soporte para notificaciones Push para resolver dudas al instante.
-
-### ✂️ Experiencia del Administrador (Control Total)
-1.  **Agenda de Hoy:** Una lista organizada cronológicamente donde el barbero marca la asistencia de los clientes con un solo toque.
-2.  **Gestor de Disponibilidad:** ¿Día festivo? ¿Cierre por imprevisto? El admin puede bloquear fechas completas para que nadie pueda reservar.
-3.  **Control de Negocio:** Panel de estadísticas que calcula la facturación real y detecta cuál es el "Servicio Estrella" del mes.
-4.  **Catálogo Dinámico:** Edición instantánea de precios, duraciones y nuevos premios desde el propio terminal móvil.
+- [Funcionalidades principales](#funcionalidades-principales)
+- [Roles de usuario](#roles-de-usuario)
+- [Tecnologías utilizadas](#tecnologías-utilizadas)
+- [Base de datos](#base-de-datos)
+- [Arquitectura del proyecto](#arquitectura-del-proyecto)
+- [Instalación y ejecución](#instalación-y-ejecución)
+- [Generación del APK](#generación-del-apk)
+- [Configuración de seguridad](#configuración-de-seguridad)
+- [Mejoras futuras](#mejoras-futuras)
+- [English summary](#english-summary)
 
 ---
 
-## 🛠️ Arquitectura Técnica y "Secret Sauce"
+## Funcionalidades principales
 
-Este proyecto implementa soluciones técnicas avanzadas para problemas comunes en el desarrollo móvil:
+### Cliente
 
-* **Algoritmo de Colisiones:** El sistema de reservas calcula la duración de cada servicio y busca bloques contiguos de 15 minutos, evitando solapamientos accidentales.
-* **Optimización de Imágenes (Base64):** Para evitar costes de almacenamiento extra en servidores externos, las fotos de perfil se procesan, comprimen y convierten a cadenas Base64 almacenadas directamente en Firestore.
-* **Sincronización en Tiempo Real:** Uso intensivo de `Streams` para que, si el barbero cancela una cita, el cliente lo vea en su móvil sin necesidad de refrescar la pantalla.
-* **Seguridad por Roles:** Implementación de lógica de filtrado en el arranque para proteger las rutas de administración.
+- Registro e inicio de sesión mediante Firebase Authentication.
+- Consulta de servicios disponibles.
+- Reserva de citas con cálculo de disponibilidad real.
+- Consulta de próximas citas.
+- Cancelación de citas con restricciones para evitar cancelaciones de última hora.
+- Chat en tiempo real con el administrador.
+- Sistema de fidelización mediante **Citas V** y **Citas X**.
+- Canje de cupones usando puntos acumulados.
+- Edición de perfil e imagen de usuario.
+
+### Administrador
+
+- Panel de agenda diaria.
+- Consulta de citas pendientes.
+- Marcado de citas como completadas o ausentes.
+- Bloqueo de días no disponibles.
+- Gestión de servicios, precios y duración.
+- Gestión de cupones y recompensas.
+- Chat con clientes y badges de mensajes no leídos.
+- Consulta de ingresos y estadísticas básicas.
 
 ---
 
-## 🛡️ Configuración de Seguridad y Credenciales
+## Roles de usuario
 
-Este repositorio cumple con las **Buenas Prácticas de Seguridad**. Se han omitido los archivos sensibles mediante `.gitignore`.
+La aplicación diferencia entre **cliente** y **administrador** mediante un campo de rol almacenado en Firestore.
 
-Para desplegar una instancia propia, el desarrollador debe:
+| Rol | Acceso principal |
+|---|---|
+| Cliente | Servicios, reservas, mis citas, chat, cupones y perfil. |
+| Administrador | Agenda, citas pendientes, gestión de servicios, cupones, chat e ingresos. |
 
-1.  **Vincular Firebase:** Descargar y colocar `google-services.json` en `android/app/`.
-2.  **Configurar OneSignal:**
-    * Sustituir la clave en `main.dart`: `OneSignal.initialize("TU_APP_ID")`.
-    * Sustituir la API Key en `pantalla_chat.dart`: `"Authorization": "Basic TU_REST_API_KEY"`.
-3.  **Habilitar Localizations:** La app está configurada para calendario en español mediante `flutter_localizations`.
+Este enfoque permite usar una única aplicación con dos experiencias distintas según el tipo de usuario autenticado.
 
 ---
 
-## 📐 Estructura del Proyecto
+## Tecnologías utilizadas
+
+| Tecnología | Uso en el proyecto |
+|---|---|
+| Flutter | Desarrollo de la aplicación móvil multiplataforma. |
+| Dart | Lenguaje principal de desarrollo. |
+| Firebase Authentication | Registro, inicio de sesión y control de usuarios. |
+| Cloud Firestore | Base de datos en la nube y sincronización en tiempo real. |
+| Firebase Core | Inicialización de servicios Firebase. |
+| OneSignal | Integración preparada para notificaciones push, pendiente de configuración productiva. |
+| HTTP | Envío de peticiones externas para integraciones. |
+| Image Picker | Selección de imágenes de perfil. |
+| Google Fonts | Tipografías de la interfaz. |
+| Git y GitHub | Control de versiones y entrega del código fuente. |
+
+> Nota: OneSignal está contemplado como integración preparada o mejora futura. El repositorio no incluye credenciales reales de producción.
+
+---
+
+## Base de datos
+
+La aplicación utiliza **Cloud Firestore** para almacenar y sincronizar la información principal del sistema.
+
+Colecciones principales:
+
+| Colección | Descripción |
+|---|---|
+| `clientes` | Datos de usuario, rol, puntos, asistencia y perfil. |
+| `citas` | Reservas realizadas, fecha, hora, servicio, estado y cliente asociado. |
+| `servicios` | Catálogo de servicios, precios y duración. |
+| `cupones` | Recompensas configuradas por el administrador. |
+| `canjes_cupones` | Historial de cupones canjeados por los clientes. |
+| `chats` | Conversaciones, mensajes y contadores de no leídos. |
+| `dias_bloqueados` | Fechas bloqueadas por el administrador para impedir reservas. |
+
+---
+
+## Arquitectura del proyecto
+
+El código se organiza por responsabilidades para facilitar el mantenimiento y separar configuración, pantallas y utilidades comunes.
 
 ```text
 lib/
-├── screens/                        # Capa de Interfaz de Usuario (UI)
-│   ├── pantalla_splash.dart        # Identidad visual corporativa y carga de recursos iniciales.
-│   ├── pantalla_bienvenida.dart    # Punto de acceso principal y gestión de flujos de autenticación.
-│   ├── pantalla_inicio.dart        # Dashboard central con navegación dinámica según el rol (Admin/Cliente).
-│   ├── pantalla_reserva.dart       # Algoritmo de reservas con lógica de bloques de 15 min y disponibilidad.
-│   ├── pantalla_mis_citas.dart     # Gestión de agenda del cliente y control de políticas de cancelación.
-│   ├── pantalla_mis_cupones.dart   # Visualización de fidelidad, puntos acumulados y catálogo de premios.
-│   ├── pantalla_editar_perfil.dart # Administración de datos personales y procesamiento de imágenes en Base64.
-│   ├── pantalla_chat.dart          # Comunicación en tiempo real mediante Streams y notificaciones OneSignal.
-│   ├── pantalla_admin.dart         # Panel operativo del barbero para control de asistencia y agenda diaria.
-│   ├── pantalla_gestion_servicios.dart # CRUD dinámico para la administración de la oferta comercial.
-│   ├── pantalla_gestion_cupones.dart   # Configuración del programa de recompensas y puntos necesarios.
-│   ├── pantalla_estadisticas.dart  # Business Intelligence: análisis de ingresos y métricas de rendimiento.
-│   └── pantalla_login.dart         # Interfaz de acceso seguro vinculada a la base de datos de Firebase Auth.
-│
-├── firebase_options.dart           # Configuración técnica de Firebase (Excluido de Git por seguridad).
-└── main.dart                       # Punto de entrada y observador del ciclo de vida de la aplicación.
+├── core/
+│   ├── app_routes.dart          # Transiciones y navegación reutilizable.
+│   ├── app_theme.dart           # Tema visual de la aplicación.
+│   └── constants.dart           # Nombres de colecciones y campos de Firestore.
+├── screens/
+│   ├── pantalla_splash.dart
+│   ├── pantalla_bienvenida.dart
+│   ├── pantalla_login.dart
+│   ├── pantalla_registro.dart
+│   ├── pantalla_inicio.dart
+│   ├── pantalla_reserva.dart
+│   ├── pantalla_mis_citas.dart
+│   ├── pantalla_mis_cupones.dart
+│   ├── pantalla_editar_perfil.dart
+│   ├── pantalla_chat.dart
+│   ├── pantalla_admin.dart
+│   ├── pantalla_gestion_servicios.dart
+│   ├── pantalla_gestion_cupones.dart
+│   └── pantalla_estadisticas.dart
+├── utils/
+│   └── ui_utils.dart            # Utilidades comunes de interfaz.
+├── firebase_options.dart        # Configuración local generada para Firebase.
+└── main.dart                    # Punto de entrada de la aplicación.
+
 assets/
-└── images/                         # Recursos gráficos: logos, banners y material promocional.
+├── logo_osi_barber.png
+└── logo_osi_barber2.png
 ```
 
+---
 
+## Lógica destacada
 
+### Cálculo de disponibilidad
 
+El sistema de reservas divide la jornada en bloques de **15 minutos**. Cada servicio tiene una duración determinada, y la aplicación calcula cuántos bloques consecutivos necesita antes de mostrar una hora como disponible.
 
-# 💈 OSI Barber: Barbershop Management 4.0
+La disponibilidad se calcula teniendo en cuenta:
 
-[![Flutter](https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter&logoColor=white)](https://flutter.dev)
-[![Firebase](https://img.shields.io/badge/Firebase-Auth%20%26%20Firestore-FFCA28?logo=firebase&logoColor=black)](https://firebase.google.com/)
-[![OneSignal](https://img.shields.io/badge/Notifications-OneSignal-E44B32?logo=onesignal&logoColor=white)](https://onesignal.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+- citas ya existentes en Firestore;
+- duración del servicio seleccionado;
+- días bloqueados por el administrador;
+- horarios ocupados;
+- prevención de solapamientos.
 
-## English Version
+### Chat y badges
+
+El chat utiliza Firestore para guardar mensajes y mantener contadores separados:
+
+- `noLeidosAdmin`
+- `noLeidosCliente`
+
+Al abrir una conversación, el contador correspondiente se reinicia para que el badge desaparezca.
+
+### Fidelización
+
+El sistema diferencia entre:
+
+- **Citas V**: asistencias completadas que suman puntos.
+- **Citas X**: ausencias registradas por el administrador.
+
+Los puntos acumulados permiten canjear cupones, quedando el canje registrado en `canjes_cupones`.
 
 ---
 
-> **OSI Barber** is not just a booking app; it is a complete ecosystem designed to automate the workflow of a professional barbershop, build customer loyalty, and optimize business profitability.
+## Instalación y ejecución
+
+### Requisitos previos
+
+- Flutter SDK compatible con Dart `^3.11.0`.
+- Android SDK configurado.
+- Proyecto Firebase propio.
+- Dispositivo Android físico o emulador.
+
+### Pasos
+
+```bash
+git clone https://github.com/Osito96/OSI-Barber.git
+cd OSI-Barber
+flutter pub get
+```
+
+Configurar Firebase:
+
+1. Crear un proyecto en Firebase.
+2. Habilitar Firebase Authentication.
+3. Habilitar Cloud Firestore.
+4. Añadir `google-services.json` en `android/app/`.
+5. Generar o configurar `lib/firebase_options.dart` según el proyecto Firebase utilizado.
+
+Ejecutar la aplicación:
+
+```bash
+flutter run
+```
 
 ---
 
-## 📖 Application Guide
+## Generación del APK
 
-The application is divided into two completely distinct experiences based on the user's role (Client or Administrator), managed dynamically from login.
+Para generar una versión instalable en Android:
 
-### 👤 Client Experience (Loyalty and Self-Management)
-1.  **Booking in Seconds:** The client selects a service and views a dynamic calendar showing only real available slots.
-2.  **Gamification (V-Points):** For each attendance, the user earns points. If they fail to show up without notice, they receive an "X-Penalty" (Cita X).
-3.  **Coupon Marketplace:** Accumulated points can be redeemed for free services or discounts through a visual validation system with the barber.
-4.  **Direct Communication:** Integrated chat with Push notification support to resolve questions instantly.
+```bash
+flutter build apk --release
+```
 
-### ✂️ Administrator Experience (Total Control)
-1.  **Today's Agenda:** A chronologically organized list where the barber marks client attendance with a single tap.
-2.  **Availability Manager:** Public holiday? Unexpected closure? The admin can block entire dates so no one can book.
-3.  **Business Control:** Statistics dashboard that calculates real revenue and identifies the "Star Service" of the month.
-4.  **Dynamic Catalog:** Instant editing of prices, durations, and new rewards directly from the mobile device.
-
----
-
-## 🛠️ Technical Architecture and "Secret Sauce"
-
-This project implements advanced technical solutions for common mobile development challenges:
-
-* **Collision Algorithm:** The booking system calculates the duration of each service and finds contiguous 15-minute blocks, preventing accidental overlaps.
-* **Image Optimization (Base64):** To avoid extra storage costs on external servers, profile pictures are processed, compressed, and converted into Base64 strings stored directly in Firestore.
-* **Real-Time Synchronization:** Intensive use of `Streams` so that if the barber cancels an appointment, the client sees it on their mobile device without needing to refresh the screen.
-* **Role-Based Security:** Implementation of filtering logic at startup to protect administrative routes.
-
----
-
-## 🛡️ Security Configuration and Credentials
-
-This repository complies with **Security Best Practices**. Sensitive files have been omitted using `.gitignore`.
-
-To deploy a custom instance, the developer must:
-
-1.  **Link Firebase:** Download and place `google-services.json` in `android/app/`.
-2.  **Configure OneSignal:**
-    * Replace the App ID in `main.dart`: `OneSignal.initialize("YOUR_APP_ID")`.
-    * Replace the API Key in `pantalla_chat.dart`: `"Authorization": "Basic YOUR_REST_API_KEY"`.
-3.  **Enable Localizations:** The app is configured for a Spanish calendar using `flutter_localizations`.
-
----
-
-## 📐 Project Structure
+El APK resultante se genera normalmente en:
 
 ```text
-lib/
-├── screens/                        # User Interface (UI) Layer
-│   ├── pantalla_splash.dart        # Corporate visual identity and initial resource loading.
-│   ├── pantalla_bienvenida.dart    # Main access point and authentication flow management.
-│   ├── pantalla_inicio.dart        # Central dashboard with dynamic navigation based on role (Admin/Client).
-│   ├── pantalla_reserva.dart       # Booking algorithm with 15-min block logic and availability.
-│   ├── pantalla_mis_citas.dart     # Client agenda management and cancellation policy control.
-│   ├── pantalla_mis_cupones.dart   # Loyalty visualization, accumulated points, and rewards catalog.
-│   ├── pantalla_editar_perfil.dart # Personal data administration and Base64 image processing.
-│   ├── pantalla_chat.dart          # Real-time communication via Streams and OneSignal notifications.
-│   ├── pantalla_admin.dart         # Barber operational panel for attendance control and daily agenda.
-│   ├── pantalla_gestion_servicios.dart # Dynamic CRUD for commercial offer administration.
-│   ├── pantalla_gestion_cupones.dart   # Reward program configuration and required points.
-│   ├── pantalla_estadisticas.dart  # Business Intelligence: revenue analysis and performance metrics.
-│   └── pantalla_login.dart         # Secure access interface linked to the Firebase Auth database.
-│
-├── firebase_options.dart           # Technical Firebase configuration (Excluded from Git for security).
-└── main.dart                       # Entry point and application lifecycle observer.
-assets/
-└── images/                         # Graphic resources: logos, banners, and promotional material.
+build/app/outputs/flutter-apk/app-release.apk
+```
+
+---
+
+## Configuración de seguridad
+
+El repositorio no debe incluir credenciales reales ni claves privadas.
+
+Archivos y valores que deben configurarse localmente:
+
+- `android/app/google-services.json`
+- `lib/firebase_options.dart`
+- App ID de OneSignal, si se activa la integración.
+- REST API Key de OneSignal, si se activa el envío de notificaciones push.
+
+En el código se mantienen placeholders para evitar publicar credenciales sensibles.
+
+---
+
+## Estado del proyecto
+
+Proyecto finalizado como entrega académica de TFG.
+
+Incluye:
+
+- aplicación Flutter funcional;
+- conexión con Firebase Authentication y Firestore;
+- flujos de cliente y administrador;
+- sistema de reservas;
+- chat;
+- cupones;
+- estadísticas;
+- generación de APK release.
+
+---
+
+## Mejoras futuras
+
+- Configuración completa de notificaciones push con OneSignal.
+- Gestión multiempleado para barberías con varios trabajadores.
+- Pasarela de pago online.
+- Panel web de administración.
+- Publicación en Google Play Store.
+
+---
+
+## English summary
+
+**OSI Barber** is a Flutter mobile application created as a final academic project for barbershop management.
+
+The app includes appointment booking, role-based access, customer and administrator flows, Firestore real-time data, chat, coupons, attendance tracking and basic business statistics.
+
+Main technologies:
+
+- Flutter and Dart
+- Firebase Authentication
+- Cloud Firestore
+- OneSignal integration prepared for future push notifications
+- Git and GitHub
+
+To run the project, configure a Firebase project, add the required local Firebase files and execute:
+
+```bash
+flutter pub get
+flutter run
+```
+
+To build the Android release APK:
+
+```bash
+flutter build apk --release
+```
